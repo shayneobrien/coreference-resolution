@@ -1,0 +1,9 @@
+ipython
+jupyter
+nltk
+torch
+torchtext
+fnmatch
+boltons
+cached_property
+tqdm
