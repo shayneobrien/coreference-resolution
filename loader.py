@@ -16,11 +16,11 @@ class Corpus:
     def __init__(self, documents):
         self.documents = documents
         
+    def __getitem__(self, idx):
+        return self.documents[idx]   
+    
     def __repr__(self):
         return 'Corpus containg %d documents' % len(self.documents)
-    
-    def __getitem__(self, idx):
-        return self.documents[idx]
     
     def get_vocab(self):
         """ Set vocabulary for LazyVectors """
@@ -34,6 +34,7 @@ class Corpus:
 class Document:
     def __init__(self, tokens, corefs, speakers, genre):
         self.tokens = tokens
+        self.spans = compute_idx_spans(tokens)
         self.corefs = corefs
         self.speakers = speakers
         self.genre = genre
@@ -188,6 +189,10 @@ def fix_coref_spans(document):
         document.corefs[idx]['word_span'] = tuple(document.tokens[coref['start']:coref['end']+1])
         document.corefs[idx]['span'] = tuple(token_idxs[coref['start']:coref['end']+1])
     return document  
+
+def compute_idx_spans(tokens, L = 5):
+    """ Compute all possible token spans """
+    return flatten([iterutils.windowed(range(len(tokens)), length) for length in range(1, L)])
 
 def flatten(alist):
     """ Flatten a list of lists into one list """
