@@ -2,20 +2,20 @@
 # Preprocessing steps
 # Char cnn over UNKs
 # Regularization
-# Fix loss.backward()
 # Tidy up gold permutations
 # Other feature representations
-# Loss goes to zero (?)
 # Add in recall
 
 import torch
 import torch.nn as nn
+import torch.optim as optim
 import torch.nn.functional as F
 from torchtext.vocab import Vectors
 
-import time
+import time, random
 import numpy as np
-from boltons.iterutils import windowed
+
+from functools import reduce
 from loader import *
 from utils import *
 
@@ -30,17 +30,10 @@ def doc_to_tensor(document):
     """ Convert a sentence to a tensor """
     return to_var(torch.tensor([token_to_id(token) for token in document.tokens]))
 
-def to_var(x):
-    """ Convert a tensor to a backprop tensor """
-    if torch.cuda.is_available():
-        x = x.cuda()
-    return x#.requires_grad_()
-
-# Load in corpus, lazily load in word vectors.
+# # Load in corpus, lazily load in word vectors.
 train_corpus = read_corpus('../data/train/')
 VECTORS = LazyVectors()
 VECTORS.set_vocab(train_corpus.get_vocab())
-
 
 class DocumentEncoder(nn.Module):
     def __init__(self, hidden_dim):
@@ -60,34 +53,42 @@ class DocumentEncoder(nn.Module):
         
         Returns hidden states at each time step, embedded tokens
         """
-        tensor = doc_to_tensor(document)
-        tensor = tensor.unsqueeze(0)
+        tensor = doc_to_tensor(document) # Convert document tokens to look up ids
+        tensor = tensor.unsqueeze(0) 
         
-        embeds = self.embeddings(tensor)
+        embeds = self.embeddings(tensor) # Embed the tokens, dropout
         embeds = self.emb_dropout(embeds)
         
-        states, _ = self.lstm(embeds)
+        states, _ = self.lstm(embeds) # Pass an LSTM over the embeds, dropout
         states = self.out_dropout(states)
     
         return states.squeeze(), embeds.squeeze()
 
 
-class MentionScore(nn.Module):
-    """ Mention scoring module """
-    def __init__(self, input_dim, hidden_dim):
+class Score(nn.Module):
+    """ Generic scoring module """
+    def __init__(self, input_dim, hidden_dim = 150):
         super().__init__()
-        
-        gi_dim = input_dim * 3
-                    
+                            
         self.score = nn.Sequential(
-            nn.Linear(gi_dim, hidden_dim),
+            nn.Linear(input_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, 1),
         )
         
-        self.attention = SpanAttention(input_dim, hidden_dim)
+    def forward(self, x):
+        return self.score(x)
+
+
+class MentionScore(nn.Module):
+    """ Mention scoring module """
+    def __init__(self, attn_dim, gi_dim):
+        super().__init__()
+                
+        self.attention = Score(attn_dim)
+        self.score = Score(gi_dim)
         
     def forward(self, states, embeds, document, LAMBDA = 0.40):
         """ Compute mention score for span s_i given its representation g_i
@@ -96,90 +97,78 @@ class MentionScore(nn.Module):
         """
         attns = self.attention(states)
         
-        mention_reprs = []
+        spans = []
 
         for span in document.spans:
                 
-            start, end = span[0], span[-1]
-
-            span_embeds = embeds[start:end+1]
-            span_states = states[start:end+1]
-            span_attn = attns[start:end+1]
+            i1, i2 = span[0], span[-1]
+        
+            span_embeds = embeds[i1:i2+1]
+            span_states = states[i1:i2+1]
+            span_attn = attns[i1:i2+1]
 
             attn = F.softmax(span_attn, dim = 0)
             attn = sum(attn * span_embeds)
 
             g_i = torch.cat([span_states[0], span_states[-1], attn])
 
-            mention_reprs.append(g_i)
+            spans.append(Span(document, i1, i2, g_i))
             
-        mention_reprs = torch.stack(mention_reprs)
+        mention_reprs = torch.stack([s.g for s in spans])
 
         mention_scores = self.score(mention_reprs).squeeze()
         
-        mention_scores, pruned_idx = prune(mention_scores, document, LAMBDA)
+        spans = [
+            attr.evolve(span, si=si)
+            for span, si in zip(spans, mention_scores)
+        ]
                 
-        return mention_scores, mention_reprs, pruned_idx
+        return spans
 
 
-class SpanAttention(nn.Module):
-    """ Attention module """
-    def __init__(self, input_dim, hidden_dim):
-        super().__init__()
-        
-        self.activate = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 1),
-        )        
-        
-    def forward(self, states):
-        """ Compute attention for headedness as in Lee et al., 2017 
-        
-        Returns weighted sum of word vectors in a given span.
-        """
-        
-        return self.activate(states)
-    
-
-class PairwiseScore(nn.Module):
+class PairwiseScore(Score):
     """ Coreference pair scoring module """
-    def __init__(self, input_dim, hidden_dim):
-        super().__init__()
+    # input_dim * 9
         
-        gij_dim = input_dim * 9
-        
-        self.score = nn.Sequential(
-            nn.Linear(gij_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 1)
-        )
-        
-    def forward(self, mention_reprs, pruned_idx, K = 50):
+    def forward(self, spans, K = 50):
         """ Compute pairwise score for spans s_i and s_j given representation g_ij
         
         Returns scalar score for whether span s_i and s_j are coreferent mentions
         """        
-        pairwise_reprs = []
-        for idx, i in enumerate(pruned_idx):
+        spans = [
+            attr.evolve(span, yi=spans[max(0, idx-K):idx])
+            for idx, span in enumerate(spans)
+        ]
 
-            g_i = mention_reprs[i] # span i representation g_i
+        pairs = torch.stack([
+            torch.cat([i.g, j.g, i.g*j.g])
+            for i in spans for j in i.yi
+        ])
 
-            for j in pruned_idx[max(0, idx-K):idx]:
+        pairwise_scores = self.score(pairs).squeeze()
 
-                g_j = mention_reprs[j] # span j representation g_j
+        sa_idx = pairwise_indexes(spans)
 
-                span_ij = torch.cat([g_i, g_j, g_i*g_j], dim = 0) # coref between span i, span j representation g_ij
+        spans_ij = []
+        for span, (i1, i2) in zip(spans, pair(sa_idx)):
 
-                pairwise_reprs += [span_ij] # append it to the other coref representations
+            sij = [
+                (span.si + yi.si + pair)
+                for yi, pair in zip(span.yi, pairwise_scores[i1:i2])
+            ]
 
-        pairwise_reprs = torch.stack(pairwise_reprs)
-    
-        return self.score(pairwise_reprs).squeeze()
+            epsilon = to_var(torch.tensor(0.))
+            sij = torch.stack(sij + [epsilon])
+
+            spans_ij.append(attr.evolve(span, sij=sij))
+            
+        spans = [
+            attr.evolve(span, yi_idx = [((span.i1, span.i2), (y.i1, y.i2)) for y in span.yi])
+            for span in spans_ij
+        ]
+        
+        return spans
+
 
 
 class CorefScore(nn.Module):
@@ -187,10 +176,15 @@ class CorefScore(nn.Module):
     def __init__(self, input_dim, hidden_dim):
         super().__init__()
         
+        # Compute hidden state sizes for each module
+        attn_dim = hidden_dim * 2 # Forward, backward of LSTM
+        gi_dim = attn_dim * 3     # Forward, backward of LSTM for: gi_start, gi_end, gi_attn 
+        gij_dim = gi_dim * 3      # g_i, g_j, g_i*g_j
+        
         # Initialize neural modules
         self.encode_doc = DocumentEncoder(hidden_dim)
-        self.score_spans = MentionScore(input_dim, hidden_dim)
-        self.score_pairs = PairwiseScore(input_dim, hidden_dim)
+        self.score_spans = MentionScore(attn_dim, gi_dim)
+        self.score_pairs = PairwiseScore(gij_dim)
         
     def forward(self, document):
         """ Enocde document, predict and prune mentions, get pairwise mention scores, get coreference link score
@@ -199,77 +193,93 @@ class CorefScore(nn.Module):
         # Encode the document, keep the LSTM hidden states and embedded tokens
         states, embeds = self.encode_doc(document)
 
-        # Get pruned mention scores
-        mention_scores, mention_reprs, pruned_idx = self.score_spans(states, embeds, document)
-
-        # Get pairwise scores
-        pairwise_scores = self.score_pairs(mention_reprs, pruned_idx)
+        # Get mention scores for each span
+        spans = self.score_spans(states, embeds, document)
         
-        return mention_scores, pairwise_scores, pruned_idx
+        # Prune the spans by decreasing mention score
+        spans = prune(spans)
+        
+        # Get pairwise scores for each span combo
+        spans = self.score_pairs(spans)
+        
+        return spans
+
+
+class Trainer:
+    
+    def __init__(self, train_corpus, model, lr = 1e-3):
+        self.train_corpus = list(train_corpus)
+        self.model = model
+        self.optimizer = optim.Adam(params=[p for p in self.model.parameters() if p.requires_grad], lr = lr)
+        
+        if torch.cuda.is_available():
+            self.model.cuda()
+            
+            
+    def train(self, num_epochs, *args, **kwargs):
+        for epoch in range(num_epochs):
+            self.train_epoch(epoch, *args, **kwargs)
+            
+    def train_epoch(self, epoch, steps = 100):
+        
+        self.model.train()
+        
+        docs = random.sample(self.train_corpus, steps)
+        
+        epoch_loss = []
+        
+        for document in tqdm_notebook(docs):
+            
+            loss = self.train_doc(document)
+            
+            epoch_loss.append(loss)
+            
+        print('Epoch: %d | Loss: %f' % (epoch, np.mean(epoch_loss)))
+        
+        
+    def train_doc(self, document, CLIP = 5):
+        
+        # Extract gold coreference links
+        gold_corefs, total_golds = extract_gold_corefs(document)
+        
+        # Zero out optimizer gradients
+        self.optimizer.zero_grad()
+
+        losses = []
+        for span in self.model(document):
+
+            # Check which of these tuples are in the gold set, if any
+            gold_idx = [
+                idx for idx, link in enumerate(span.yi_idx)
+                if link in gold_corefs
+            ]
+
+            # If gold_pred_idx is empty, all golds have been pruned or there are none; set gold to dummy
+            if not gold_idx:
+                gold_idx = [len(span.yi_idx)-1]
+
+            # Conditional probability distribution over all possible previous spans
+            probs = F.softmax(span.sij, dim = 0)
+
+            # Marginal log-likelihood of correct antecedents implied by gold clustering
+            mass = torch.log(sum([probs[i] for i in gold_idx]))
+
+            # Save the loss for this span
+            losses.append(mass)
+
+        # Negative marginal log-likelihood for minimizing, backpropagate
+        loss = torch.mean(torch.stack(losses)) * -1
+        loss.backward()
+        
+        # Clip parameters
+        nn.utils.clip_grad_norm_(model.parameters(), CLIP)
+        
+        # Step the optimizer
+        self.optimizer.step()
+        
+        return loss.item()
 
 
 model = CorefScore(input_dim = 300, hidden_dim = 150)
-K = 50
-document = train_corpus[2311] #train_corpus[2311]
-
-optimizer = torch.optim.Adam(params=[p for p in model.parameters() if p.requires_grad])
-
-# Get gold corefs
-gold_corefs, num_golds = extract_gold_corefs(document)
-
-# Forward pass over the document
-mention_scores, pairwise_scores, pruned_idx = model(document)
-
-# Initialize ij for indexing pairwise_scores, losses for log-likelihood loss of each span
-ij, losses = 0, []
-
-# Get coreference scores:
-for idx, i in tqdm_notebook(enumerate(pruned_idx)):
-
-    antecedents = []
-
-    # Get up to K antecedents for each span i
-    for j in pruned_idx[max(0, idx - K):idx]:
-        antecedents.append((i, j, ij))
-        ij += 1
-
-    # Recoop the tuples for span i, span j
-    y_i = [(document.spans[j], document.spans[i]) for i, j, _ in antecedents]
-
-    # Check which of these tuples are in the gold set, if any
-    gold_pred_idx = [idx for idx, span in enumerate(y_i) if span in gold_corefs]
-
-    # If gold_pred_idx is empty, all golds have been pruned or there are none; set gold to dummy
-    if not gold_pred_idx:
-        gold_pred_idx = [len(y_i)]
-
-    # Compute the coreference mention score for span i and all of its antecedents
-    coref_repr = [(mention_scores[i] + mention_scores[j] + pairwise_scores[ij]) 
-                for _, j, ij in antecedents] 
-
-    # Stack them to softmax, add in the dummy variable for possibility of no antecedent
-    dummy = to_var(torch.tensor(0.))
-    score_ij = torch.stack(coref_repr + [dummy])
-
-    # Conditional probability distribution over all possible previous spans
-    probs = F.softmax(score_ij, dim = 0)
-
-    # Marginal log-likelihood of correct antecedents implied by gold clustering
-    mass = torch.log(sum([probs[idx] for idx in gold_pred_idx]))
-
-    # Save loss for this score_ij
-    losses.append(mass)
-
-# Negative marginal log-likelihood loss
-loss = torch.mean(torch.stack(losses)) * -1
-
-optimizer.zero_grad()
-start = time.time()
-with torch.autograd.profiler.profile() as prof:
-    loss.backward()
-end = time.time()
-print(end-start)
-optimizer.step()
-
-prof.export_chrome_trace('trace_idx')
-
+trainer = Trainer(train_corpus, model)
+trainer.train(10)

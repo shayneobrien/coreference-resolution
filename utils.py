@@ -5,7 +5,7 @@ from torch.autograd import Variable
 import numpy as np
 
 from loader import flatten
-from boltons import iterutils
+from boltons.iterutils import windowed
 from itertools import groupby, permutations
 from collections import defaultdict
 
@@ -15,82 +15,44 @@ def to_var(x):
         x = x.cuda()
     return x.requires_grad_()
 
-def make_mention_reprs(lstm_out, embedded, idx_spans, model):
-    """ Make span representations for unary mention scoring """
-    reprs = []
-    
-    for span in idx_spans:
-        
-        start, end = span[0], span[-1] # get start, end id of span
-        
-        x_start, x_end, x_attn = lstm_out[start], lstm_out[end], model.attention(lstm_out[start:end+1], embedded[start:end+1]) # g_i
-        
-        reprs.append(torch.cat([x_start, x_end, x_attn], dim = 0)) # No additional features yet
-    
-    return torch.stack(reprs)
-
-def prune(mention_scores, document, LAMBDA):
+def prune(spans, LAMBDA=0.40):
     """ Prune mention scores to the top lambda percent. Returns list of tuple(scores, indices, g_i) """
-    STOP = int(LAMBDA * len(document.spans)) # lambda * document_length
+    STOP = int(LAMBDA * len(spans[0].doc)) # lambda * document_length
 
-    _, sorted_idx = torch.sort(mention_scores, descending=True) # sort scores by highest mention
-
-    sorted_idx = sorted_idx.data.numpy() # don't need these ids in variable, so convert to numpy
-
-    sorted_spans = [document.spans[i] for i in sorted_idx] # get sorted spans
-
-    overlaps = remove_overlapping(sorted_spans) # identify spans that overlap with a previously accepted span
-
-    nonoverlapping = [sorted_idx[idx] for idx, val in enumerate(overlaps) if val] # remove overlapping spans
-
-    pruned_idx = sorted(nonoverlapping[:STOP]) # prune to just the top the top λT, sort by idx
-
-    mention_scores = torch.stack([mention_scores[idx] for idx in pruned_idx]) # prune mention scores by id
-
-    return mention_scores, pruned_idx
+    sorted_spans = sorted(spans, key=lambda span:span.si, reverse=True) # sort spans by mention score
+    nonoverlapping = remove_overlapping(sorted_spans) # remove any overlapping spans
+    pruned_spans = nonoverlapping[:STOP] # prune to just the top the top λT, sort by idx
+    
+    return pruned_spans
 
 def remove_overlapping(sorted_spans):
     """ Remove spans that are overlapping by order of decreasing mention score """
-    nonoverlapping, accepted_spans = [], []
-    
-    for span_i in sorted_spans:
-        
-        start_i, end_i, flag = span_i[0], span_i[-1], True # get start, end indices of span i
-        
-        for span_j in accepted_spans:
-            
-            start_j, end_j = span_j[0], span_j[-1] # get start, end indices of already accepted span j
-            
-            if (start_i < start_j <= end_i < end_j) or (start_j < start_i <= end_j < end_i): # i and j overlap
-                flag = False # let the function know not to accept this span
-                break # break this loop, since we will not accept span i
-                
+    nonoverlapping, accepted = [], []
+    for span_i in sorted_spans: # for every combination of spans with already accepted spans
+        flag = True
+        for span_j in accepted:
+            if ((span_i.i1 < span_j.i1 <= span_i.i2 < span_j.i2) # if i overlaps j or vice versa
+                or 
+                (span_j.i1 < span_i.i1 <= span_j.i2 < span_i.i2)): 
+                    flag = False # let the function know not to accept this span
+                    break        # break this loop, since we will not accept span i
+
         if flag: # if span i does not overlap with any previous spans
-            accepted_spans.append(span_i) # accept it
-            
+            accepted.append(span_i) # accept it
+
         nonoverlapping.append(flag) # for span i's list idx, let True if it should be accepted and False otherwise
 
+    nonoverlapping = [sorted_spans[idx] for idx, keep in enumerate(nonoverlapping) if keep] # prune
     return nonoverlapping
 
-def get_coref_pairs(mention_reprs, pruned_idx, idx_spans, K):
-    """ Compute coreference pairings for pruned mentions. Returns tuple(i idx, j idx, span_i score, span_j score, span_ij representation) """
-    
-    pairwise_reprs = []
-    for idx, i in enumerate(pruned_idx):
+def pairwise_indexes(spans):
+    """ Get indices for indexing into pairwise_scores """
+    indexes = [0] + [len(s.yi) for s in spans]
+    indexes = [sum(indexes[:idx+1]) for idx, _ in enumerate(indexes)]
+    return indexes
 
-        g_i = mention_reprs[i] # span i representation g_i
-
-        for j in pruned_idx[max(0, idx-K):idx]:
-
-            g_j = mention_reprs[j] # span j representation g_j
-
-            span_ij = torch.cat([g_i, g_j, g_i*g_j], dim = 0)   # coref between span i, span j representation g_ij
-
-            pairwise_reprs += [span_ij] # append it to the other coref representations
-
-    pairwise_reprs = torch.stack(pairwise_reprs).squeeze() 
-
-    return pairwise_reprs
+def pair(spans):
+    return windowed(spans, 2)
 
 def extract_gold_corefs(document):
     """ Parse coreference dictionary of a document to get coref links """

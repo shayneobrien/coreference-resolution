@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torchtext.vocab import Vectors
 from torch.autograd import Variable
 
-import os, io, re
+import os, io, re, attr
 from fnmatch import fnmatch
 from boltons import iterutils
 from cached_property import cached_property
@@ -47,6 +47,40 @@ class Document:
     
     def __len__(self):
         return len(self.tokens)
+
+    
+@attr.s(frozen=True, repr=False)
+class Span:
+    
+    # Parent document reference.
+    doc = attr.ib()
+
+    # Left / right token indexes.
+    i1 = attr.ib()
+    i2 = attr.ib()
+
+    # Span embedding tensor.
+    g = attr.ib()
+
+    # Unary mention score, as tensor.
+    si = attr.ib(default=None)
+    
+    # List of candidate antecedent spans.
+    yi = attr.ib(default=None)
+
+    # Pairwise scores for each yi.
+    sij = attr.ib(default=None)
+    
+    # Corresponding span ids to each yi
+    yi_idx = attr.ib(default = None)
+    
+    def __repr__(self):
+        return "'" + " ".join(self.doc.tokens[self.i1:self.i2+1]) + "'"
+
+    @cached_property
+    def tokens(self):
+        return self.doc.tokens[self.i1:self.i2+1]
+
 
 class LazyVectors:
 
@@ -187,7 +221,7 @@ def fix_coref_spans(document):
     token_idxs = range(len(document.tokens))
     for idx, coref in enumerate(document.corefs):
         document.corefs[idx]['word_span'] = tuple(document.tokens[coref['start']:coref['end']+1])
-        document.corefs[idx]['span'] = tuple(token_idxs[coref['start']:coref['end']+1])
+        document.corefs[idx]['span'] = tuple([coref['start'], coref['end']])
     return document  
 
 def compute_idx_spans(tokens, L = 5):
