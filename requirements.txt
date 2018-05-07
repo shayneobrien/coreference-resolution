@@ -3,7 +3,7 @@ jupyter
 nltk
 torch
 torchtext
-fnmatch
 boltons
 cached_property
+attrs
 tqdm
