@@ -1,9 +1,3 @@
-
-# coding: utf-8
-
-# In[ ]:
-
-
 # TODO:
 # Preprocessing steps
 # Char cnn over UNKs
@@ -14,10 +8,6 @@
 # Loss goes to zero (?)
 # Add in recall
 
-
-# In[1]:
-
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -25,6 +15,7 @@ from torchtext.vocab import Vectors
 
 import time
 import numpy as np
+from boltons.iterutils import windowed
 from loader import *
 from utils import *
 
@@ -37,15 +28,18 @@ def token_to_id(token):
 
 def doc_to_tensor(document):
     """ Convert a sentence to a tensor """
-    return to_var(torch.LongTensor([token_to_id(token) for token in document.tokens]))
+    return to_var(torch.tensor([token_to_id(token) for token in document.tokens]))
+
+def to_var(x):
+    """ Convert a tensor to a backprop tensor """
+    if torch.cuda.is_available():
+        x = x.cuda()
+    return x#.requires_grad_()
 
 # Load in corpus, lazily load in word vectors.
 train_corpus = read_corpus('../data/train/')
 VECTORS = LazyVectors()
 VECTORS.set_vocab(train_corpus.get_vocab())
-
-
-# In[3]:
 
 
 class DocumentEncoder(nn.Module):
@@ -67,18 +61,15 @@ class DocumentEncoder(nn.Module):
         Returns hidden states at each time step, embedded tokens
         """
         tensor = doc_to_tensor(document)
-        
         tensor = tensor.unsqueeze(0)
         
         embeds = self.embeddings(tensor)
-        
         embeds = self.emb_dropout(embeds)
         
-        lstm_out, _ = self.lstm(embeds)
-        
-        lstm_out = self.out_dropout(lstm_out)
+        states, _ = self.lstm(embeds)
+        states = self.out_dropout(states)
     
-        return lstm_out.squeeze(), embeds.squeeze()
+        return states.squeeze(), embeds.squeeze()
 
 
 class MentionScore(nn.Module):
@@ -96,59 +87,62 @@ class MentionScore(nn.Module):
             nn.Linear(hidden_dim, 1),
         )
         
-        self.attention = SpanAttention(input_dim)
+        self.attention = SpanAttention(input_dim, hidden_dim)
         
-    def forward(self, lstm_out, embeds, document, LAMBDA = 0.40):
+    def forward(self, states, embeds, document, LAMBDA = 0.40):
         """ Compute mention score for span s_i given its representation g_i
         
         Returns scalar score for whether span s_i is a mention
         """
+        attns = self.attention(states)
+        
         mention_reprs = []
 
         for span in document.spans:
+                
+            start, end = span[0], span[-1]
 
-            start, end = span[0], span[-1] # get start, end id of span
+            span_embeds = embeds[start:end+1]
+            span_states = states[start:end+1]
+            span_attn = attns[start:end+1]
 
-            x_start, x_end, x_attn = lstm_out[start], lstm_out[end], self.attention(lstm_out[start:end+1], embeds[start:end+1]) # g_i
+            attn = F.softmax(span_attn, dim = 0)
+            attn = sum(attn * span_embeds)
 
-            mention_reprs.append(torch.cat([x_start, x_end, x_attn], dim = 0)) # No additional features yet
+            g_i = torch.cat([span_states[0], span_states[-1], attn])
 
+            mention_reprs.append(g_i)
+            
         mention_reprs = torch.stack(mention_reprs)
 
         mention_scores = self.score(mention_reprs).squeeze()
         
-        _, pruned_idx = prune(mention_scores, document, LAMBDA)
+        mention_scores, pruned_idx = prune(mention_scores, document, LAMBDA)
                 
         return mention_scores, mention_reprs, pruned_idx
 
 
 class SpanAttention(nn.Module):
     """ Attention module """
-    def __init__(self, input_dim):
+    def __init__(self, input_dim, hidden_dim):
         super().__init__()
         
         self.activate = nn.Sequential(
-            nn.Linear(input_dim, input_dim),
+            nn.Linear(input_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(input_dim, input_dim),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(input_dim, input_dim),
+            nn.Linear(hidden_dim, 1),
         )        
         
-    def forward(self, lstm_span, embeds_span):
+    def forward(self, states):
         """ Compute attention for headedness as in Lee et al., 2017 
         
         Returns weighted sum of word vectors in a given span.
         """
         
-        alpha = self.activate(lstm_span)
-        
-        weights = F.softmax(alpha, dim = 1)
-        
-        weighted_sum = torch.sum(weights * embeds_span, dim = 0)
-                
-        return weighted_sum 
-
+        return self.activate(states)
+    
 
 class PairwiseScore(nn.Module):
     """ Coreference pair scoring module """
@@ -203,10 +197,10 @@ class CorefScore(nn.Module):
         
         """
         # Encode the document, keep the LSTM hidden states and embedded tokens
-        lstm_out, embeds = self.encode_doc(document)
+        states, embeds = self.encode_doc(document)
 
         # Get pruned mention scores
-        mention_scores, mention_reprs, pruned_idx = self.score_spans(lstm_out, embeds, document)
+        mention_scores, mention_reprs, pruned_idx = self.score_spans(states, embeds, document)
 
         # Get pairwise scores
         pairwise_scores = self.score_pairs(mention_reprs, pruned_idx)
@@ -214,16 +208,11 @@ class CorefScore(nn.Module):
         return mention_scores, pairwise_scores, pruned_idx
 
 
-# In[6]:
-
-
 model = CorefScore(input_dim = 300, hidden_dim = 150)
 K = 50
-document = train_corpus[1]
+document = train_corpus[2311] #train_corpus[2311]
 
-
-# In[7]:
-
+optimizer = torch.optim.Adam(params=[p for p in model.parameters() if p.requires_grad])
 
 # Get gold corefs
 gold_corefs, num_golds = extract_gold_corefs(document)
@@ -249,8 +238,6 @@ for idx, i in tqdm_notebook(enumerate(pruned_idx)):
 
     # Check which of these tuples are in the gold set, if any
     gold_pred_idx = [idx for idx, span in enumerate(y_i) if span in gold_corefs]
-    if gold_pred_idx:
-        print(idx, gold_pred_idx)
 
     # If gold_pred_idx is empty, all golds have been pruned or there are none; set gold to dummy
     if not gold_pred_idx:
@@ -276,9 +263,13 @@ for idx, i in tqdm_notebook(enumerate(pruned_idx)):
 # Negative marginal log-likelihood loss
 loss = torch.mean(torch.stack(losses)) * -1
 
+optimizer.zero_grad()
+start = time.time()
+with torch.autograd.profiler.profile() as prof:
+    loss.backward()
+end = time.time()
+print(end-start)
+optimizer.step()
 
-# In[ ]:
-
-
-loss.backward()
+prof.export_chrome_trace('trace_idx')
 
