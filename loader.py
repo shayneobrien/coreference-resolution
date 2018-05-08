@@ -4,9 +4,10 @@ import torch.nn.functional as F
 from torchtext.vocab import Vectors
 from torch.autograd import Variable
 
-import os, io, re, attr
+import os, io, re, attr, random
+from copy import deepcopy as c
 from fnmatch import fnmatch
-from boltons import iterutils
+from boltons.iterutils import windowed
 from cached_property import cached_property
 
 NORMALIZE_DICT = {"/.": ".", "/?": "?", "-LRB-": "(", "-RRB-": ")", "-LCB-": "{", "-RCB-": "}", "-LSB-": "[", "-RSB-": "]"}
@@ -31,6 +32,7 @@ class Corpus:
             
         return vocab
 
+    
 class Document:
     def __init__(self, tokens, corefs, speakers, genre):
         self.tokens = tokens
@@ -47,6 +49,15 @@ class Document:
     
     def __len__(self):
         return len(self.tokens)
+    
+    def truncate(self, MAX=50):
+        """ Randomly truncate the document to up to MAX sentences """
+        sentences = [idx for idx, token in enumerate(self.tokens) if token in ['.', '?', '!']]
+        if len(sentences) > MAX:
+            i = random.sample(range(MAX, len(sentences)), 1)[0]
+            tokens = self.tokens[sentences[i-50]:sentences[i]]
+            return self.__class__(tokens, c(self.corefs), c(self.speakers), c(self.genre))
+        return self
 
     
 @attr.s(frozen=True, repr=False)
@@ -127,6 +138,7 @@ class LazyVectors:
         """
         idx = self._stoi.get(s)
         return idx + 2 if idx else self.unk_idx
+
 
 def read_corpus(dirname):
     conll_files = parse_filenames(dirname = dirname, pattern = "*gold_conll")
@@ -223,10 +235,13 @@ def fix_coref_spans(document):
         document.corefs[idx]['word_span'] = tuple(document.tokens[coref['start']:coref['end']+1])
         document.corefs[idx]['span'] = tuple([coref['start'], coref['end']])
     return document  
+                
+def pair(spans):
+    return windowed(spans, 2)
 
-def compute_idx_spans(tokens, L = 5):
+def compute_idx_spans(tokens, L = 10):
     """ Compute all possible token spans """
-    return flatten([iterutils.windowed(range(len(tokens)), length) for length in range(1, L)])
+    return flatten([windowed(range(len(tokens)), length) for length in range(1, L)])
 
 def flatten(alist):
     """ Flatten a list of lists into one list """

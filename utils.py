@@ -9,6 +9,18 @@ from boltons.iterutils import windowed
 from itertools import groupby, permutations
 from collections import defaultdict
 
+bins = [
+    range(1,2),     # 1
+    range(2,3),     # 2
+    range(3,4),     # 3
+    range(4,5),     # 4
+    range(5,8),     # 5-7
+    range(8,16),    # 8-15
+    range(16,32),   # 16-31
+    range(32,64),   # 32-63
+    range(64, 1000) # 64+
+]
+
 def to_var(x):
     """ Convert a tensor to a backprop tensor """
     if torch.cuda.is_available():
@@ -50,9 +62,6 @@ def pairwise_indexes(spans):
     indexes = [0] + [len(s.yi) for s in spans]
     indexes = [sum(indexes[:idx+1]) for idx, _ in enumerate(indexes)]
     return indexes
-
-def pair(spans):
-    return windowed(spans, 2)
 
 def extract_gold_corefs(document):
     """ Parse coreference dictionary of a document to get coref links """
