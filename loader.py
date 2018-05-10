@@ -16,23 +16,23 @@ REMOVED_CHAR = ["/", "%", "*"]
 class Corpus:
     def __init__(self, documents):
         self.documents = documents
-        
+
     def __getitem__(self, idx):
-        return self.documents[idx]   
-    
+        return self.documents[idx]
+
     def __repr__(self):
         return 'Corpus containg %d documents' % len(self.documents)
-    
+
     def get_vocab(self):
         """ Set vocabulary for LazyVectors """
         vocab = set()
-        
+
         for document in self.documents:
             vocab.update(document.tokens)
-            
+
         return vocab
 
-    
+
 class Document:
     def __init__(self, tokens, corefs, speakers, genre):
         self.tokens = tokens
@@ -40,16 +40,16 @@ class Document:
         self.corefs = corefs
         self.speakers = speakers
         self.genre = genre
-    
+
     def __getitem__(self, idx):
         return (self.text[idx], self.corefs[idx], self.speakers[idx], self.genre)
-    
+
     def __repr__(self):
         return 'Document containing %d tokens' % len(self.tokens)
-    
+
     def __len__(self):
         return len(self.tokens)
-    
+
     def truncate(self, MAX=50):
         """ Randomly truncate the document to up to MAX sentences """
         sentences = [idx for idx, token in enumerate(self.tokens) if token in ['.', '?', '!']]
@@ -59,10 +59,10 @@ class Document:
             return self.__class__(tokens, c(self.corefs), c(self.speakers), c(self.genre))
         return self
 
-    
+
 @attr.s(frozen=True, repr=False)
 class Span:
-    
+
     # Parent document reference.
     doc = attr.ib()
 
@@ -75,16 +75,16 @@ class Span:
 
     # Unary mention score, as tensor.
     si = attr.ib(default=None)
-    
+
     # List of candidate antecedent spans.
     yi = attr.ib(default=None)
 
     # Pairwise scores for each yi.
     sij = attr.ib(default=None)
-    
+
     # Corresponding span ids to each yi
     yi_idx = attr.ib(default = None)
-    
+
     def __repr__(self):
         return "'" + " ".join(self.doc.tokens[self.i1:self.i2+1]) + "'"
 
@@ -98,9 +98,9 @@ class LazyVectors:
     unk_idx = 1
 
     def __init__(self, name='glove.840B.300d.txt'):
-        """ Load only those vectors from GloVE that are in the vocab. 
-        
-        Requires the glove vectors to be in a folder named .vector_cache 
+        """ Load only those vectors from GloVE that are in the vocab.
+
+        Requires the glove vectors to be in a folder named .vector_cache
         (linux: mv glove.840B.300d.text .vector_cache/glove.840B.300d.text)
         """
         self.name = name
@@ -143,15 +143,15 @@ class LazyVectors:
 def read_corpus(dirname):
     conll_files = parse_filenames(dirname = dirname, pattern = "*gold_conll")
     return Corpus(flatten([load_file(file) for file in conll_files]))
-    
+
 def load_file(filename):
     """ Load a *._conll file
-    Input: 
+    Input:
         filename: path to the file
     Output:
         documents: list of Document class for each document in the file containing:
             tokens:                   split list of text
-            utts_corefs:            
+            utts_corefs:
                 coref['label']:     id of the coreference cluster
                 coref['start']:     start index (index of first token in the utterance)
                 coref['end':        end index (index of last token in the utterance)
@@ -165,34 +165,34 @@ def load_file(filename):
         genre = filename.split('/')[6]
         for line in f:
             cols = line.split()
-            
+
             # End of utterance within a document: update lists, reset variables for next utterance.
             if len(cols) == 0:
                 if text:
                     tokens.extend(text), utts_corefs.extend(corefs), utts_speakers.extend([speaker]*len(text))
                     text, corefs = [], []
                     continue
-                    
+
             # End of document: organize the data, append to output, reset variables for next document.
-            elif len(cols) == 2: 
+            elif len(cols) == 2:
                 doc = fix_coref_spans(Document(tokens, utts_corefs, utts_speakers, genre))
                 documents.append(doc)
                 tokens, text, utts_corefs, utts_speakers, index = [], [], [], [], 0
-                
+
             # Inside an utterance: grab text, speaker, coreference information.
             elif len(cols) > 7:
                 text.append(clean_token(cols[3]))
                 speaker = cols[9]
-                
+
                 # If the last column isn't a '-', there is a coreference link
                 if cols[-1] != u'-':
                     coref_expr = cols[-1].split(u'|')
                     for token in coref_expr:
-                        
+
                         # Check if coref column token entry contains (, a number, or ).
                         match = re.match(r"^(\(?)(\d+)(\)?)$", token)
                         label = match.group(2)
-                        
+
                         # If it does, extract the coref label, its start index, and end index.
                         if match.group(1) == u'(':
                             corefs.append({'label': label, 'start': index, 'end': None, 'span': None})
@@ -205,9 +205,9 @@ def load_file(filename):
             else:
                 # Beginning of document, beginning of file, end of file: nothing to scrape off
                 continue
-                
+
     return documents
-            
+
 def parse_filenames(dirname, pattern = "*conll"):
     """ Walk a nested directory to get all filename ending in a pattern """
     filenames = []
@@ -215,7 +215,7 @@ def parse_filenames(dirname, pattern = "*conll"):
         for name in files:
             if fnmatch(name, pattern):
                 yield os.path.join(path, name)
-            
+
 def clean_token(token):
     """ Substitute in /?(){}[] for equivalent CoNLL-2012 representations, remove /%* """
     cleaned_token = token
@@ -226,7 +226,7 @@ def clean_token(token):
             cleaned_token = cleaned_token.replace(char, u'')
     if len(cleaned_token) == 0:
         cleaned_token = ","
-    return cleaned_token 
+    return cleaned_token
 
 def fix_coref_spans(document):
     """ Add in token spans to corefs dict. Done post-hoc due to way text variable is updated """
@@ -234,8 +234,8 @@ def fix_coref_spans(document):
     for idx, coref in enumerate(document.corefs):
         document.corefs[idx]['word_span'] = tuple(document.tokens[coref['start']:coref['end']+1])
         document.corefs[idx]['span'] = tuple([coref['start'], coref['end']])
-    return document  
-                
+    return document
+
 def pair(spans):
     return windowed(spans, 2)
 

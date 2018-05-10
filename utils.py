@@ -9,17 +9,6 @@ from boltons.iterutils import windowed
 from itertools import groupby, permutations
 from collections import defaultdict
 
-bins = [
-    range(1,2),     # 1
-    range(2,3),     # 2
-    range(3,4),     # 3
-    range(4,5),     # 4
-    range(5,8),     # 5-7
-    range(8,16),    # 8-15
-    range(16,32),   # 16-31
-    range(32,64),   # 32-63
-    range(64, 1000) # 64+
-]
 
 def to_var(x):
     """ Convert a tensor to a backprop tensor """
@@ -28,34 +17,31 @@ def to_var(x):
     return x.requires_grad_()
 
 def prune(spans, LAMBDA=0.40):
-    """ Prune mention scores to the top lambda percent. Returns list of tuple(scores, indices, g_i) """
+    """ Prune mention scores to the top lambda percent """
     STOP = int(LAMBDA * len(spans[0].doc)) # lambda * document_length
 
-    sorted_spans = sorted(spans, key=lambda span:span.si, reverse=True) # sort spans by mention score
+    sorted_spans = sorted(spans, key=lambda s: s.si, reverse=True) # sort by mention score
     nonoverlapping = remove_overlapping(sorted_spans) # remove any overlapping spans
-    pruned_spans = nonoverlapping[:STOP] # prune to just the top the top λT, sort by idx
-    
+    pruned_spans = sorted(nonoverlapping[:STOP], key=lambda s: (s.i1, s.i2)) # prune to the top the top λT
+
     return pruned_spans
 
 def remove_overlapping(sorted_spans):
     """ Remove spans that are overlapping by order of decreasing mention score """
-    nonoverlapping, accepted = [], []
-    for span_i in sorted_spans: # for every combination of spans with already accepted spans
+    overlap = lambda s1, s2: s1.i1 < s2.i1 <= s1.i2 < s2.i2
+
+    accepted = []
+    for s1 in sorted_spans: # for every combination of spans with accepted spans
         flag = True
-        for span_j in accepted:
-            if ((span_i.i1 < span_j.i1 <= span_i.i2 < span_j.i2) # if i overlaps j or vice versa
-                or 
-                (span_j.i1 < span_i.i1 <= span_j.i2 < span_i.i2)): 
-                    flag = False # let the function know not to accept this span
-                    break        # break this loop, since we will not accept span i
+        for s2 in accepted:
+            if overlap(s1, s2) or overlap(s2, s1): # i overlaps j or vice versa
+                flag = False # let the function know not to accept this span
+                break        # break this loop, since we will not accept span i
 
         if flag: # if span i does not overlap with any previous spans
-            accepted.append(span_i) # accept it
+            accepted.append(s1) # accept it
 
-        nonoverlapping.append(flag) # for span i's list idx, let True if it should be accepted and False otherwise
-
-    nonoverlapping = [sorted_spans[idx] for idx, keep in enumerate(nonoverlapping) if keep] # prune
-    return nonoverlapping
+    return accepted
 
 def pairwise_indexes(spans):
     """ Get indices for indexing into pairwise_scores """
@@ -66,15 +52,16 @@ def pairwise_indexes(spans):
 def extract_gold_corefs(document):
     """ Parse coreference dictionary of a document to get coref links """
     gold_links = defaultdict(list)
-    
-    for coref_entry in document.corefs:
-        
-        label, span_idx = coref_entry['label'], coref_entry['span'] # parse label of coref span, the span itself
-        
-        gold_links[label].append(span_idx) # get all spans corresponding to some label
 
-    gold_corefs = flatten([[gold for gold in permutations(gold, 2)] for gold in gold_links.values()]) # all possible coref spans
-    
-    total_golds = len(gold_links) / 2 # the actual number of gold spans (we list (x, y) and (y, x) as both valid due to laziness)
-       
+    for coref_entry in document.corefs:
+
+        label, span_idx = coref_entry['label'], coref_entry['span'] # parse
+
+        gold_links[label].append(span_idx) # get spans corresponding to some label
+
+    gold_corefs = flatten([[gold for gold in permutations(gold, 2)]
+                            for gold in gold_links.values()]) # all coref spans
+
+    total_golds = len(gold_links) / 2 # (x, y), (y, x) both valid due to laziness
+
     return gold_corefs, total_golds
