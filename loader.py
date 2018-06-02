@@ -74,6 +74,9 @@ class Span:
     # Span embedding tensor.
     g = attr.ib()
     
+    # Speaker
+    speaker = attr.ib(default=None)
+    
     # Unary mention score, as tensor.
     si = attr.ib(default=None)
 
@@ -85,9 +88,6 @@ class Span:
 
     # Corresponding span ids to each yi
     yi_idx = attr.ib(default=None)
-    
-    # Speaker
-    speaker = attr.ib(default=None)
 
     def __repr__(self):
         return 'Span representing %d tokens' % (self.i2-self.i1)

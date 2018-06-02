@@ -19,6 +19,12 @@ def to_cuda(x):
         x = x.cuda()
     return x
 
+def s_to_speaker(span, speakers):
+    i1, i2 = span[0], span[-1]
+    if speakers[i1] == speakers[i2]:
+        return speakers[i1]
+    return None
+
 def prune(spans, T, LAMBDA=0.40):
     """ Prune mention scores to the top lambda percent. Returns list of tuple(scores, indices, g_i) """
     STOP = int(LAMBDA * T) # lambda * document_length

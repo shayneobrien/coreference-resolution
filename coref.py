@@ -1,7 +1,5 @@
 # TODO:
 # Convert to sentence LSTM
-# Speaker reading
-# Speaker incorporation
 
 # Eval
 # Early stopping
@@ -115,7 +113,7 @@ class Speaker(nn.Module):
         super().__init__()    
         
         self.embeds = nn.Sequential(
-            nn.Embedding(3, genre_dim, padding_idx=0),
+            nn.Embedding(3, speaker_dim, padding_idx=0),
             nn.Dropout(0.20)
         )
         
@@ -129,7 +127,7 @@ class Speaker(nn.Module):
         elif s1.speaker != s2.speaker:
             idx = torch.tensor(2)
             
-        # Missing speaker
+        # No speaker
         else:
             idx = torch.tensor(0)
         
@@ -243,6 +241,9 @@ class MentionScore(nn.Module):
         for span in document.spans: # could probably deprecate this
             # Start index, end index of the span
             i1, i2 = span[0], span[-1]
+            
+            # Speaker
+            speaker = s_to_speaker(span, document.speakers)
 
             # Embeddings, hidden states, raw attn scores for tokens
             span_embeds = embeds[i1:i2+1]
@@ -257,7 +258,7 @@ class MentionScore(nn.Module):
 
             # Final span representation g_i
             g_i = torch.cat([states[i1], states[i2], attn, size])
-            spans.append(Span(i1, i2, g_i))
+            spans.append(Span(i1, i2, g_i, speaker))
             
         # Compute each span's unary mention score
         mention_reprs = torch.stack([s.g for s in spans])
@@ -274,12 +275,13 @@ class MentionScore(nn.Module):
 
 class PairwiseScore(nn.Module):
     """ Coreference pair scoring module """
-    def __init__(self, gij_dim, distance_dim, genre_dim):
+    def __init__(self, gij_dim, distance_dim, genre_dim, speaker_dim):
         super().__init__()
 
         self.distance = Distance(distance_dim)
         self.genre = Genre(genre_dim)
-#         self.speaker = Speaker(speaker_dim)
+        self.speaker = Speaker(speaker_dim)
+        
         self.score = Score(gij_dim)
 
     def forward(self, spans, genre, K=250):
@@ -295,7 +297,9 @@ class PairwiseScore(nn.Module):
         # Get s_ij representations
         pairs = torch.stack([
             torch.cat([i.g, j.g, i.g*j.g, 
-                       self.distance(i.i2-j.i1), self.genre(genre)])
+                       self.distance(i.i2-j.i1), 
+                       self.genre(genre), 
+                       self.speaker(i, j)])
             for i in spans for j in i.yi
         ])
 
@@ -332,8 +336,13 @@ class PairwiseScore(nn.Module):
 
 class CorefScore(nn.Module):
     """ Super class to compute coreference links between spans """
-    def __init__(self, embeds_dim, hidden_dim, 
-                       char_filters=50, distance_dim=20, genre_dim=20):
+    def __init__(self, embeds_dim, 
+                       hidden_dim, 
+                       char_filters=50, 
+                       distance_dim=20, 
+                       genre_dim=20,
+                       speaker_dim=20):
+        
         super().__init__()
 
         # Forward and backward pass over the document
@@ -343,12 +352,12 @@ class CorefScore(nn.Module):
         gi_dim = attn_dim*2 + embeds_dim + distance_dim
         
         # gi, gj, gi*gj, distance between gi and gj
-        gij_dim = gi_dim*3 + distance_dim + genre_dim
+        gij_dim = gi_dim*3 + distance_dim + genre_dim + speaker_dim
 
         # Initialize modules
         self.encode_doc = DocumentEncoder(hidden_dim, char_filters)
         self.score_spans = MentionScore(gi_dim, attn_dim, distance_dim)
-        self.score_pairs = PairwiseScore(gij_dim, distance_dim, genre_dim)
+        self.score_pairs = PairwiseScore(gij_dim, distance_dim, genre_dim, speaker_dim)
 
     def forward(self, document):
         """ Enocde document
@@ -368,7 +377,6 @@ class CorefScore(nn.Module):
         spans = self.score_pairs(spans, document.genre)
 
         return spans
-
 
 
 class Trainer:
@@ -469,7 +477,7 @@ class Trainer:
         self.model = to_cuda(self.model)
 
 
-model = CorefScore(embeds_dim=350, hidden_dim=100)
+model = CorefScore(embeds_dim=350, hidden_dim=200)
 trainer = Trainer(train_corpus, model)
 trainer.train(100)
 
