@@ -13,9 +13,11 @@ from cached_property import cached_property
 NORMALIZE_DICT = {"/.": ".", "/?": "?", "-LRB-": "(", "-RRB-": ")", "-LCB-": "{", "-RCB-": "}", "-LSB-": "[", "-RSB-": "]"}
 REMOVED_CHAR = ["/", "%", "*"]
 
+
 class Corpus:
     def __init__(self, documents):
         self.documents = documents
+        self.vocab, self.char_vocab = self.get_vocab()
 
     def __getitem__(self, idx):
         return self.documents[idx]
@@ -25,12 +27,14 @@ class Corpus:
 
     def get_vocab(self):
         """ Set vocabulary for LazyVectors """
-        vocab = set()
+        vocab, char_vocab = set(), set()
 
         for document in self.documents:
             vocab.update(document.tokens)
+            char_vocab.update([char for word in document.tokens 
+                               for char in word])
 
-        return vocab
+        return vocab, char_vocab
 
 
 class Document:
@@ -42,7 +46,7 @@ class Document:
         self.genre = genre
 
     def __getitem__(self, idx):
-        return (self.text[idx], self.corefs[idx], self.speakers[idx], self.genre)
+        return (self.tokens[idx], self.corefs[idx], self.speakers[idx], self.genre)
 
     def __repr__(self):
         return 'Document containing %d tokens' % len(self.tokens)
@@ -63,16 +67,13 @@ class Document:
 @attr.s(frozen=True, repr=False)
 class Span:
 
-    # Parent document reference.
-    doc = attr.ib()
-
     # Left / right token indexes.
     i1 = attr.ib()
     i2 = attr.ib()
 
     # Span embedding tensor.
     g = attr.ib()
-
+    
     # Unary mention score, as tensor.
     si = attr.ib(default=None)
 
@@ -83,14 +84,13 @@ class Span:
     sij = attr.ib(default=None)
 
     # Corresponding span ids to each yi
-    yi_idx = attr.ib(default = None)
+    yi_idx = attr.ib(default=None)
+    
+    # Speaker
+    speaker = attr.ib(default=None)
 
     def __repr__(self):
-        return "'" + " ".join(self.doc.tokens[self.i1:self.i2+1]) + "'"
-
-    @cached_property
-    def tokens(self):
-        return self.doc.tokens[self.i1:self.i2+1]
+        return 'Span representing %d tokens' % (self.i2-self.i1)
 
 
 class LazyVectors:
@@ -101,7 +101,9 @@ class LazyVectors:
         """ Load only those vectors from GloVE that are in the vocab.
 
         Requires the glove vectors to be in a folder named .vector_cache
-        (linux: mv glove.840B.300d.text .vector_cache/glove.840B.300d.text)
+        (linux: 
+        >> mkdir .vector_cache
+        >> mv glove.840B.300d.text .vector_cache/glove.840B.300d.text)
         """
         self.name = name
 
@@ -210,7 +212,6 @@ def load_file(filename):
 
 def parse_filenames(dirname, pattern = "*conll"):
     """ Walk a nested directory to get all filename ending in a pattern """
-    filenames = []
     for path, subdirs, files in os.walk(dirname):
         for name in files:
             if fnmatch(name, pattern):
@@ -221,9 +222,11 @@ def clean_token(token):
     cleaned_token = token
     if cleaned_token in NORMALIZE_DICT:
         cleaned_token = NORMALIZE_DICT[cleaned_token]
+    
     if cleaned_token not in REMOVED_CHAR:
         for char in REMOVED_CHAR:
             cleaned_token = cleaned_token.replace(char, u'')
+    
     if len(cleaned_token) == 0:
         cleaned_token = ","
     return cleaned_token
@@ -231,6 +234,7 @@ def clean_token(token):
 def fix_coref_spans(document):
     """ Add in token spans to corefs dict. Done post-hoc due to way text variable is updated """
     token_idxs = range(len(document.tokens))
+    
     for idx, coref in enumerate(document.corefs):
         document.corefs[idx]['word_span'] = tuple(document.tokens[coref['start']:coref['end']+1])
         document.corefs[idx]['span'] = tuple([coref['start'], coref['end']])
