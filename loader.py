@@ -90,7 +90,7 @@ class Span:
     yi_idx = attr.ib(default=None)
 
     def __repr__(self):
-        return 'Span representing %d tokens' % (self.i2-self.i1)
+        return 'Span representing %d tokens' % (self.i2-self.i1+1)
 
 
 class LazyVectors:
