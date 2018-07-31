@@ -235,7 +235,6 @@ class MentionScore(nn.Module):
 
         """
         # Compute first part of attention over span states
-        # TODO: double check if this attention works (no parameters)
         attns = self.attention(states)
 
         spans = []
