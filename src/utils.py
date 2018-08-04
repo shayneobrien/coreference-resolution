@@ -32,14 +32,14 @@ def prune(spans, T, LAMBDA=0.40):
     sorted_spans = sorted(spans, key=lambda s: s.si, reverse=True) # sort spans by mention score
     nonoverlapping = remove_overlapping(sorted_spans) # remove any overlapping spans
     pruned_spans = nonoverlapping[:STOP] # prune to just the top the top λT, sort by idx
-    
+
     spans = sorted(pruned_spans, key=lambda s: (s.i1, s.i2))
     return spans
 
 def remove_overlapping(sorted_spans):
     """ Remove spans that are overlapping by order of decreasing mention score """
     overlap = lambda s1, s2: s1.i1 < s2.i1 <= s1.i2 < s2.i2
-    
+
     accepted = []
     for s1 in sorted_spans: # for every combination of spans with already accepted spans
         flag = True
@@ -62,15 +62,15 @@ def pairwise_indexes(spans):
 def extract_gold_corefs(document):
     """ Parse coreference dictionary of a document to get coref links """
     gold_links = defaultdict(list)
-    
+
     for coref_entry in document.corefs:
-        
+
         label, span_idx = coref_entry['label'], coref_entry['span'] # parse label of coref span, the span itself
-        
+
         gold_links[label].append(span_idx) # get all spans corresponding to some label
 
     gold_corefs = flatten([[gold for gold in combinations(gold, 2)] for gold in gold_links.values()]) # all possible coref spans
-    
+
     total_golds = len(gold_corefs) # the actual number of gold spans (we list (x, y) and (y, x) as both valid due to laziness)
-       
+
     return gold_corefs, total_golds

@@ -4,7 +4,8 @@
 # Eval
 # Early stopping
 # Write back to CoNLL format
-# No more slicing (?)
+# run.py for making lazyvectors
+# No more slicing (is this possible to do..?)
 # Batching documents
 
 import torch
@@ -15,14 +16,14 @@ from torchtext.vocab import Vectors
 
 import time, random
 import numpy as np
-
 from functools import reduce
 from loader import *
 from utils import *
-
 from tqdm import tqdm
 from random import sample
 
+
+# TODO: Break this out, train_corpus.char_vocab fix
 def token_to_id(token):
     """ Lookup word ID for a token """
     return VECTORS.stoi(token)
@@ -84,7 +85,8 @@ class Distance(nn.Module):
 
 
 class Genre(nn.Module):
-    """ Learned continuous representations for genre. Zeros if genre unknown. """
+    """ Learned continuous representations for genre.
+    Zeros if genre unknown. """
 
     genres = ['bc', 'bn', 'mz', 'nw', 'pt', 'tc', 'wb']
     _stoi = {genre: idx+1 for idx, genre in enumerate(genres)}
@@ -108,8 +110,8 @@ class Genre(nn.Module):
 
 
 class Speaker(nn.Module):
-    """ Learned continuous representations for binary speaker. Zeros if speaker unknown. """
-
+    """ Learned continuous representations for binary speaker.
+    Zeros if speaker unknown. """
     def __init__(self, speaker_dim=20):
         super().__init__()
 
@@ -146,16 +148,18 @@ class CharCNN(nn.Module):
     def __init__(self, filters, char_dim=8):
         super().__init__()
 
-        self.embeddings = nn.Embedding(len(self.vocab)+2, char_dim, padding_idx=0)
+        self.embeddings = nn.Embedding(len(self.vocab)+2,
+                                       char_dim,
+                                       padding_idx=0)
         self.convs = nn.ModuleList([nn.Conv1d(in_channels=self.pad_size,
                                               out_channels=filters,
                                               kernel_size=n) for n in (3,4,5)])
         self.cnn_dropout = nn.Dropout(0.20)
 
     def forward(self, doc):
-        """ Compute filter-dimensional character-level features for each doc token """
+        """ Compute character-level features for each doc token """
         embedded = self.embeddings(self.doc_to_batch(doc))
-        convolved = torch.cat([F.relu(conv(embedded)) for conv in self.convs], dim=2)
+        convolved = torch.cat([F.relu(c(embedded)) for c in self.convs], dim=2)
         pooled = F.max_pool1d(convolved, convolved.shape[2])
         output = self.cnn_dropout(pooled).squeeze()
         return output
@@ -198,7 +202,8 @@ class DocumentEncoder(nn.Module):
         self.embeddings.weight.data.copy_(weights)
         self.char_embeddings = CharCNN(char_filters)
 
-        self.lstm = nn.LSTM(weights.shape[1], hidden_dim, bidirectional=True, batch_first=True)
+        self.lstm = nn.LSTM(weights.shape[1], hidden_dim,
+                            bidirectional=True, batch_first=True)
         self.emb_dropout, self.lstm_dropout = nn.Dropout(0.50), nn.Dropout(0.20)
 
     def forward(self, document):
@@ -328,7 +333,8 @@ class PairwiseScore(nn.Module):
 
         # Update spans with set of possible antecedents' indices
         spans = [
-            attr.evolve(span, yi_idx = [((y.i1, y.i2), (span.i1, span.i2)) for y in span.yi])
+            attr.evolve(span, yi_idx = [((y.i1, y.i2), (span.i1, span.i2))
+            for y in span.yi])
             for span in spans_ij
         ]
 
@@ -422,7 +428,9 @@ class Trainer:
             # Step the learning rate decrease scheduler
             self.scheduler.step()
 
-        print('Epoch: %d | Loss: %f | Recall: %f' % (epoch, np.mean(epoch_loss), np.mean(epoch_recall)))
+        print('Epoch: %d | Loss: %f | Recall: %f' % (epoch,
+                                                     np.mean(epoch_loss),
+                                                     np.mean(epoch_recall)))
 
     def train_doc(self, document, CLIP=5):
         """ Compute loss for a forward pass over a document """
@@ -485,4 +493,4 @@ class Trainer:
 # Initialize model, train
 model = CorefScore(embeds_dim=350, hidden_dim=200)
 trainer = Trainer(train_corpus, model)
-trainer.train(100)
+trainer.train(num_epochs=100, steps=25)

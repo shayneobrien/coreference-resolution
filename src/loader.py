@@ -10,7 +10,10 @@ from fnmatch import fnmatch
 from boltons.iterutils import windowed
 from cached_property import cached_property
 
-NORMALIZE_DICT = {"/.": ".", "/?": "?", "-LRB-": "(", "-RRB-": ")", "-LCB-": "{", "-RCB-": "}", "-LSB-": "[", "-RSB-": "]"}
+NORMALIZE_DICT = {"/.": ".", "/?": "?",
+                  "-LRB-": "(", "-RRB-": ")",
+                  "-LCB-": "{", "-RCB-": "}",
+                  "-LSB-": "[", "-RSB-": "]"}
 REMOVED_CHAR = ["/", "%", "*"]
 
 
@@ -40,7 +43,6 @@ class Corpus:
 class Document:
     def __init__(self, tokens, corefs, speakers, genre):
         self.tokens = tokens
-        self.spans = compute_idx_spans(tokens)
         self.corefs = corefs
         self.speakers = speakers
         self.genre = genre
@@ -53,6 +55,10 @@ class Document:
 
     def __len__(self):
         return len(self.tokens)
+
+    @cached_property
+    def spans(self):
+        return compute_idx_spans(self.tokens)
 
     def truncate(self, MAX=50):
         """ Randomly truncate the document to up to MAX sentences """
@@ -67,23 +73,23 @@ class Document:
 @attr.s(frozen=True, repr=False)
 class Span:
 
-    # Left / right token indexes.
+    # Left / right token indexes
     i1 = attr.ib()
     i2 = attr.ib()
 
-    # Span embedding tensor.
+    # Span embedding tensor
     g = attr.ib()
 
     # Speaker
     speaker = attr.ib(default=None)
 
-    # Unary mention score, as tensor.
+    # Unary mention score, as tensor
     si = attr.ib(default=None)
 
-    # List of candidate antecedent spans.
+    # List of candidate antecedent spans
     yi = attr.ib(default=None)
 
-    # Pairwise scores for each yi.
+    # Pairwise scores for each yi
     sij = attr.ib(default=None)
 
     # Corresponding span ids to each yi
@@ -255,7 +261,8 @@ def parse_filenames(dirname, pattern = "*conll"):
                 yield os.path.join(path, name)
 
 def clean_token(token):
-    """ Substitute in /?(){}[] for equivalent CoNLL-2012 representations, remove /%* """
+    """ Substitute in /?(){}[] for equivalent CoNLL-2012 representations,
+    remove /%* """
     cleaned_token = token
     if cleaned_token in NORMALIZE_DICT:
         cleaned_token = NORMALIZE_DICT[cleaned_token]
@@ -268,14 +275,15 @@ def clean_token(token):
         cleaned_token = ","
     return cleaned_token
 
-def fix_coref_spans(document):
-    """ Add in token spans to corefs dict. Done post-hoc due to way text variable is updated """
-    token_idxs = range(len(document.tokens))
+def fix_coref_spans(doc):
+    """ Add in token spans to corefs dict.
+    Done post-hoc due to way text variable is updated """
+    token_idxs = range(len(doc.tokens))
 
-    for idx, coref in enumerate(document.corefs):
-        document.corefs[idx]['word_span'] = tuple(document.tokens[coref['start']:coref['end']+1])
-        document.corefs[idx]['span'] = tuple([coref['start'], coref['end']])
-    return document
+    for idx, coref in enumerate(doc.corefs):
+        doc.corefs[idx]['word_span'] = tuple(doc.tokens[coref['start']:coref['end']+1])
+        doc.corefs[idx]['span'] = tuple([coref['start'], coref['end']])
+    return doc
 
 def pair(spans):
     return windowed(spans, 2)
