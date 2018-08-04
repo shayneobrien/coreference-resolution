@@ -19,7 +19,7 @@ current working directory.  It is recommended that getcwd (or another
 *cwd() function) be used in I<all> code to ensure portability.
 
 By default, it exports the functions cwd(), getcwd(), fastcwd(), and
-fastgetcwd() (and, on Win32, getdcwd()) into the caller's namespace.  
+fastgetcwd() (and, on Win32, getdcwd()) into the caller's namespace.
 
 
 =head2 getcwd and friends
@@ -114,7 +114,7 @@ A more dangerous, but potentially faster version of abs_path.
 
 =head2 $ENV{PWD}
 
-If you ask to override your chdir() built-in function, 
+If you ask to override your chdir() built-in function,
 
   use Cwd qw(chdir);
 
@@ -222,7 +222,7 @@ sub _vms_unix_rpt {
         $unix_rpt = VMS::Feature::current("filename_unix_report");
     } else {
         my $env_unix_rpt = $ENV{'DECC$FILENAME_UNIX_REPORT'} || '';
-        $unix_rpt = $env_unix_rpt =~ /^[ET1]/i; 
+        $unix_rpt = $env_unix_rpt =~ /^[ET1]/i;
     }
     return $unix_rpt;
 }
@@ -235,7 +235,7 @@ sub _vms_efs {
         $efs = VMS::Feature::current("efs_charset");
     } else {
         my $env_efs = $ENV{'DECC$EFS_CHARSET'} || '';
-        $efs = $env_efs =~ /^[ET1]/i; 
+        $efs = $env_efs =~ /^[ET1]/i;
     }
     return $efs;
 }
@@ -277,7 +277,7 @@ my %METHOD_MAP =
     realpath		=> 'fast_abs_path',
    },
 
-   dos => 
+   dos =>
    {
     cwd			=> '_dos_cwd',
     getcwd		=> '_dos_cwd',
@@ -358,7 +358,7 @@ sub _backtick_pwd {
     # Localize %ENV entries in a way that won't create new hash keys
     my @localize = grep exists $ENV{$_}, qw(PATH IFS CDPATH ENV BASH_ENV);
     local @ENV{@localize};
-    
+
     my $cwd = `$pwd_cmd`;
     # Belt-and-suspenders in case someone said "undef $/".
     local $/ = "\n";
@@ -421,7 +421,7 @@ sub _perl_getcwd
 #
 # This is a faster version of getcwd.  It's also more dangerous because
 # you might chdir out of a directory that you can't chdir back into.
-    
+
 sub fastcwd_ {
     my($odev, $oino, $cdev, $cino, $tdev, $tino);
     my(@path, $path);
@@ -550,22 +550,22 @@ sub _perl_abs_path
     unless (-d _) {
         # Make sure we can be invoked on plain files, not just directories.
         # NOTE that this routine assumes that '/' is the only directory separator.
-	
+
         my ($dir, $file) = $start =~ m{^(.*)/(.+)$}
 	    or return cwd() . '/' . $start;
-	
+
 	# Can't use "-l _" here, because the previous stat was a stat(), not an lstat().
 	if (-l $start) {
 	    my $link_target = readlink($start);
 	    die "Can't resolve link $start: $!" unless defined $link_target;
-	    
+
 	    require File::Spec;
             $link_target = $dir . '/' . $link_target
                 unless File::Spec->file_name_is_absolute($link_target);
-	    
+
 	    return abs_path($link_target);
 	}
-	
+
 	return $dir ? abs_path($dir) . "/$file" : "/$file";
     }
 
@@ -633,20 +633,20 @@ sub fast_abs_path {
 
     unless (-d _) {
         # Make sure we can be invoked on plain files, not just directories.
-	
+
 	my ($vol, $dir, $file) = File::Spec->splitpath($path);
 	return File::Spec->catfile($cwd, $path) unless length $dir;
 
 	if (-l $path) {
 	    my $link_target = readlink($path);
 	    die "Can't resolve link $path: $!" unless defined $link_target;
-	    
+
 	    $link_target = File::Spec->catpath($vol, $dir, $link_target)
                 unless File::Spec->file_name_is_absolute($link_target);
-	    
+
 	    return fast_abs_path($link_target);
 	}
-	
+
 	return $dir eq File::Spec->rootdir
 	  ? File::Spec->catpath($vol, $dir, $file)
 	  : fast_abs_path(File::Spec->catpath($vol, $dir, '')) . '/' . $file;
@@ -734,7 +734,7 @@ sub _vms_abs_path {
     # may need to turn foo.dir into [.foo]
     my $pathified = VMS::Filespec::pathify($path);
     $path = $pathified if defined $pathified;
-	
+
     return VMS::Filespec::rmsexpand($path);
 }
 
