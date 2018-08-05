@@ -24,21 +24,6 @@ from tqdm import tqdm
 from random import sample
 
 
-# TODO: Break this out, train_corpus.char_vocab fix
-def token_to_id(token):
-    """ Lookup word ID for a token """
-    return VECTORS.stoi(token)
-
-def doc_to_tensor(document):
-    """ Convert a sentence to a tensor """
-    return to_cuda(torch.tensor([token_to_id(token)
-                                 for token in document.tokens]))
-
-# Load in corpus, lazily load in word vectors.
-train_corpus = read_corpus('../data/train/')
-VECTORS = LazyVectors.from_corpus(train_corpus.vocab)
-
-
 class Score(nn.Module):
     """ Generic scoring module """
     def __init__(self, embeds_dim, hidden_dim=150):

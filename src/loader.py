@@ -8,6 +8,7 @@ import os, io, re, attr, random
 from copy import deepcopy as c
 from fnmatch import fnmatch
 from cached_property import cached_property
+from utils import *
 
 NORMALIZE_DICT = {"/.": ".", "/?": "?",
                   "-LRB-": "(", "-RRB-": ")",
@@ -274,20 +275,15 @@ def clean_token(token):
         cleaned_token = ","
     return cleaned_token
 
-def fix_coref_spans(doc):
-    """ Add in token spans to corefs dict.
-    Done post-hoc due to way text variable is updated """
-    token_idxs = range(len(doc.tokens))
+def token_to_id(token):
+    """ Lookup word ID for a token """
+    return VECTORS.stoi(token)
 
-    for idx, coref in enumerate(doc.corefs):
-        doc.corefs[idx]['word_span'] = tuple(doc.tokens[coref['start']:coref['end']+1])
-        doc.corefs[idx]['span'] = tuple([coref['start'], coref['end']])
-    return doc
+def doc_to_tensor(document):
+    """ Convert a sentence to a tensor """
+    return to_cuda(torch.tensor([token_to_id(token)
+                                 for token in document.tokens]))
 
-def compute_idx_spans(tokens, L=10):
-    """ Compute all possible token spans """
-    return flatten([windowed(range(len(tokens)), length) for length in range(1, L)])
-
-def flatten(alist):
-    """ Flatten a list of lists into one list """
-    return [item for sublist in alist for item in sublist]
+# Load in corpus, lazily load in word vectors.
+train_corpus = read_corpus('../data/train/')
+VECTORS = LazyVectors.from_corpus(train_corpus.vocab)
