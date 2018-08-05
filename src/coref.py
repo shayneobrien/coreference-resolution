@@ -1,12 +1,7 @@
 # TODO:
-# Convert to sentence LSTM
-
-# Eval
 # Early stopping
-# Write back to CoNLL format
-# run.py for making lazyvectors
 # No more slicing (is this possible to do..?)
-# Batching documents
+# Batching documents / convert to sentence LSTM
 
 import torch
 import torch.nn as nn
@@ -14,14 +9,15 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torchtext.vocab import Vectors
 
-import time, random
+import random
 import numpy as np
+import networkx as nx
 from boltons.iterutils import pairwise
-from functools import reduce
 from loader import *
 from utils import *
 from tqdm import tqdm
 from random import sample
+from subprocess import Popen, PIPE
 
 
 class Score(nn.Module):
@@ -484,7 +480,7 @@ class Trainer:
         """ Evaluate a CoNLL-2012 gold file """
 
         # Make predictions directory if there isn't one already
-        out_file = '../preds/' + test_file.split()[-1] + '.pred.txt'
+        out_file = '../preds/' + test_file.split('/')[-1] + '.pred.txt'
         if not os.path.exists('../preds/'):
             os.makedirs('../preds/')
 
@@ -534,7 +530,7 @@ class Trainer:
         with open(pred_file, 'w') as f:
             current_idx = 0
             for line in conll_file:
-                if (line.startswith('#begin') or line.startswith('#end') or line == '\n'):
+                if line.startswith('#begin') or line.startswith('#end') or line == '\n':
                     f.write(line)
                     continue
                 else:
