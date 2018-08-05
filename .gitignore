@@ -4,3 +4,4 @@ env
 __pycache__
 .vector_cache
 .ipynb_checkpoints
+.DS_Store

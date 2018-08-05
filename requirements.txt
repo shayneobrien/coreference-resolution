@@ -7,3 +7,4 @@ boltons
 cached_property
 attrs
 tqdm
+networkx

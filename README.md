@@ -1,4 +1,6 @@
 # coreference-resolution
+PyTorch 0.4.1 | Python 3.6.5
+
 Reimplementation of "End-to-end Neural Coreference Resolution," Lee et al. 2017.
 Arxiv: https://arxiv.org/pdf/1707.07045.pdf
 
