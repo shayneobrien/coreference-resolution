@@ -373,7 +373,7 @@ class CorefScore(nn.Module):
 
 
 class Trainer:
-    """ Class dedicated to training the model """
+    """ Class dedicated to training and evaluating the model """
     def __init__(self, train_corpus, model, lr=1e-3):
         self.train_corpus = list(train_corpus)
         self.model = to_cuda(model)
@@ -382,8 +382,8 @@ class Trainer:
                                             if p.requires_grad],
                                     lr=lr)
         self.scheduler = optim.lr_scheduler.StepLR(self.optimizer,
-                                                   step_size=100,
-                                                   gamma=0.001)
+                                                    step_size=100,
+                                                    gamma=0.001)
 
     def train(self, num_epochs, *args, **kwargs):
         """ Train a model """
@@ -399,7 +399,7 @@ class Trainer:
         docs = random.sample(self.train_corpus, steps)
 
         epoch_loss, epoch_recall = [], []
-        for doc in tqdm(docs):
+        for doc in tqdm_notebook(docs):
 
             # Randomly truncate document to up to 50 sentences
             document = doc.truncate()
@@ -414,9 +414,7 @@ class Trainer:
             # Step the learning rate decrease scheduler
             self.scheduler.step()
 
-        print('Epoch: %d | Loss: %f | Recall: %f' % (epoch,
-                                                     np.mean(epoch_loss),
-                                                     np.mean(epoch_recall)))
+        print('Epoch: %d | Loss: %f | Recall: %f' % (epoch, np.mean(epoch_loss), np.mean(epoch_recall)))
 
     def train_doc(self, document, CLIP=5):
         """ Compute loss for a forward pass over a document """
@@ -464,6 +462,92 @@ class Trainer:
         recall = sum(golds_found)
 
         return loss.item(), recall, total_golds
+
+    def predict(self, document):
+        """ Predict coreference links in a document """
+        graph = nx.Graph()
+        spans = self.model(document)
+        for i, span in enumerate(spans):
+
+            found_corefs = [idx
+                            for idx, score in enumerate(span.sij)
+                            if score > 0.]
+
+            if any(found_corefs):
+                for coref_idx in found_corefs:
+                    link = spans[coref_idx]
+                    graph.add_edge((span.i1, span.i2), (link.i1, link.i2))
+
+        return list(nx.connected_components(graph))
+
+    def evalute(self, test_file, eval_script='../src/eval/scorer.pl'):
+        """ Evaluate a CoNLL-2012 gold file """
+
+        # Make predictions directory if there isn't one already
+        out_file = '../preds/' + test_file.split()[-1] + '.pred.txt'
+        if not os.path.exists('../preds/'):
+            os.makedirs('../preds/')
+
+        # Load file
+        docs = load_file(test_file)
+
+        # Predict file
+        tags = self.doc_pred(docs)
+
+        # Output results
+        self.to_conll(test_file, out_file, tags, eval_script)
+
+        # Run perl script
+        p = Popen([eval_script, 'all', out_file, test_file], stdout=PIPE)
+        stdout, stderr = p.communicate()
+        return str(stdout).split('TOTALS')[-1]
+
+    def doc_pred(self, docs):
+        """ Predict and extract coreference links in a set of documents """
+        #TODO: there's a bug in here
+        all_tags = []
+        for document in tqdm_notebook(docs):
+
+            # Predict span clusters
+            clusters = self.predict(document)
+
+            # Predictions
+            tags = [[] for _ in range(len(document))]
+
+            for idx, cluster in enumerate(clusters):
+                for i1, i2 in cluster:
+
+                    if i1 == i2:
+                        tags[i1].append(f'({idx})')
+
+                    else:
+                        tags[i1].append(f'({idx}')
+                        tags[i2].append(f'{idx})')
+
+            tags = ['|'.join(t) if t else '-' for t in tags]
+            all_tags.extend(tags)
+
+        return all_tags
+
+    def to_conll(self, conll_file, pred_file, all_tags, eval_script):
+        """ Write to predictions file """
+        with open(pred_file, 'w') as f:
+            current_idx = 0
+            for line in conll_file:
+                if (line.startswith('#begin') or line.startswith('#end') or line == '\n'):
+                    f.write(line)
+                    continue
+                else:
+                    tokens = line.split()
+                    tokens[-1] = all_tags[current_idx]
+                    current_idx += 1
+                    output = '\t'.join(tokens)
+                    f.write(output)
+                f.write('\n')
+
+        p = Popen([eval_script, 'all', conll_file, pred_file], stdout=PIPE)
+        stdout, stderr = p.communicate()
+        return str(stdout).split('TOTALS')[-1]
 
     def save_model(self, savepath):
         """ Save model state dictionary """

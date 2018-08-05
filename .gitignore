@@ -1,5 +1,6 @@
 notebooks
 data
+preds
 env
 __pycache__
 .vector_cache
