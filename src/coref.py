@@ -16,6 +16,7 @@ from torchtext.vocab import Vectors
 
 import time, random
 import numpy as np
+from boltons.iterutils import pairwise
 from functools import reduce
 from loader import *
 from utils import *
@@ -316,7 +317,7 @@ class PairwiseScore(nn.Module):
         sa_idx = pairwise_indexes(spans)
 
         spans_ij = []
-        for span, (i1, i2) in zip(spans, pair(sa_idx)):
+        for span, (i1, i2) in zip(spans, pairwise(sa_idx)):
 
             # sij = score between span i, span j
             sij = [

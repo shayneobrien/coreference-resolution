@@ -7,7 +7,6 @@ from torch.autograd import Variable
 import os, io, re, attr, random
 from copy import deepcopy as c
 from fnmatch import fnmatch
-from boltons.iterutils import windowed
 from cached_property import cached_property
 
 NORMALIZE_DICT = {"/.": ".", "/?": "?",
@@ -285,10 +284,7 @@ def fix_coref_spans(doc):
         doc.corefs[idx]['span'] = tuple([coref['start'], coref['end']])
     return doc
 
-def pair(spans):
-    return windowed(spans, 2)
-
-def compute_idx_spans(tokens, L = 10):
+def compute_idx_spans(tokens, L=10):
     """ Compute all possible token spans """
     return flatten([windowed(range(len(tokens)), length) for length in range(1, L)])
 

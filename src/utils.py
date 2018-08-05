@@ -69,8 +69,10 @@ def extract_gold_corefs(document):
 
         gold_links[label].append(span_idx) # get all spans corresponding to some label
 
-    gold_corefs = flatten([[gold for gold in combinations(gold, 2)] for gold in gold_links.values()]) # all possible coref spans
+    gold_corefs = flatten([[coref
+                            for coref in combinations(gold, 2)]
+                            for gold in gold_links.values()]) # all possible coref spans
 
     total_golds = len(gold_corefs) # the actual number of gold spans (we list (x, y) and (y, x) as both valid due to laziness)
 
-    return gold_corefs, total_golds
+    return sorted(gold_corefs), total_golds
