@@ -91,7 +91,8 @@ class Genre(nn.Module):
     def stoi(self, genre):
         """ Locate embedding id for genre """
         idx = self._stoi.get(genre)
-        return torch.tensor(idx) if idx else torch.tensor(0)
+        idx = idx if idx else 0
+        return to_cuda(torch.tensor(idx))
 
 
 class Speaker(nn.Module):
@@ -120,7 +121,7 @@ class Speaker(nn.Module):
         else:
             idx = torch.tensor(0)
 
-        return self.embeds(idx)
+        return self.embeds(to_cuda(idx))
 
 
 class CharCNN(nn.Module):
@@ -157,7 +158,7 @@ class CharCNN(nn.Module):
 
     def token_to_idx(self, token):
         """ Convert a token to its character lookup ids """
-        return torch.tensor([self.stoi(c) for c in token])
+        return to_cuda(torch.tensor([self.stoi(c) for c in token]))
 
     def pad_and_stack(self, tokens):
         """ Pad and stack an uneven tensor of token lookup ids """
