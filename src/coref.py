@@ -425,9 +425,9 @@ class Trainer:
                                                                                                                         corefs_chosen, total_corefs))
 
             epoch_loss.append(loss)
-            epoch_mentions.append(safe_divide(mentions_found/total_mentions))
-            epoch_corefs.append(safe_divide(corefs_found/total_corefs))
-            epoch_identified.append(safe_divide(corefs_chosen/total_corefs))
+            epoch_mentions.append(safe_divide(mentions_found, total_mentions))
+            epoch_corefs.append(safe_divide(corefs_found, total_corefs))
+            epoch_identified.append(safe_divide(corefs_chosen, total_corefs))
 
             # Step the learning rate decrease scheduler
             self.scheduler.step()
