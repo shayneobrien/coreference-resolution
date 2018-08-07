@@ -55,8 +55,13 @@ def pairwise_indexes(spans):
 
 def extract_gold_corefs(document):
     """ Parse coreference dictionary of a document to get coref links """
+    # Initialize defaultdict for keeping track of corefs
     gold_links = defaultdict(list)
 
+    # Compute number of mentions
+    total_mentions = len(set([coref['span'] for coref in document.corefs]))
+
+    # Compute number of coreferences
     for coref_entry in document.corefs:
 
         # Parse label of coref span, the span itself
@@ -65,15 +70,15 @@ def extract_gold_corefs(document):
         # All spans corresponding to the same label
         gold_links[label].append(span_idx) # get all spans corresponding to some label
 
-    # All possible corefs
+
+    # Flatten all possible corefs, sort, get number
     gold_corefs = flatten([[coref
                             for coref in combinations(gold, 2)]
                             for gold in gold_links.values()])
+    gold_corefs = sorted(gold_corefs)
+    total_corefs = len(gold_corefs)
 
-    # For progress logging, compute number of corefs
-    total_golds = len(gold_corefs)
-
-    return sorted(gold_corefs), total_golds
+    return gold_corefs, total_corefs, total_mentions
 
 def fix_coref_spans(doc):
     """ Add in token spans to corefs dict.

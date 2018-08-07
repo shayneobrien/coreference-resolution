@@ -19,20 +19,20 @@ REMOVED_CHAR = ["/", "%", "*"]
 
 class Corpus:
     def __init__(self, documents):
-        self.documents = documents
+        self.docs = documents
         self.vocab, self.char_vocab = self.get_vocab()
 
     def __getitem__(self, idx):
-        return self.documents[idx]
+        return self.docs[idx]
 
     def __repr__(self):
-        return 'Corpus containg %d documents' % len(self.documents)
+        return 'Corpus containg %d documents' % len(self.docs)
 
     def get_vocab(self):
         """ Set vocabulary for LazyVectors """
         vocab, char_vocab = set(), set()
 
-        for document in self.documents:
+        for document in self.docs:
             vocab.update(document.tokens)
             char_vocab.update([char for word in document.tokens
                                for char in word])
@@ -41,14 +41,20 @@ class Corpus:
 
 
 class Document:
-    def __init__(self, tokens, corefs, speakers, genre):
+    def __init__(self, raw_text, tokens, corefs, speakers, genre, filename):
+        self.raw_text = raw_text
         self.tokens = tokens
         self.corefs = corefs
         self.speakers = speakers
         self.genre = genre
+        self.filename = filename
+
+        # Filled in at evaluation time.
+        self.tags = None
 
     def __getitem__(self, idx):
-        return (self.tokens[idx], self.corefs[idx], self.speakers[idx], self.genre)
+        return (self.tokens[idx], self.corefs[idx], \
+                self.speakers[idx], self.genre)
 
     def __repr__(self):
         return 'Document containing %d tokens' % len(self.tokens)
@@ -206,9 +212,10 @@ def load_file(filename):
     """
     documents = []
     with io.open(filename, 'rt', encoding='utf-8', errors='strict') as f:
-        tokens, text, utts_corefs, utts_speakers, corefs, index = [], [], [], [], [], 0
+        raw_text, tokens, text, utts_corefs, utts_speakers, corefs, index = [], [], [], [], [], [], 0
         genre = filename.split('/')[6]
         for line in f:
+            raw_text.append(line)
             cols = line.split()
 
             # End of utterance within a document: update lists, reset variables for next utterance.
@@ -220,9 +227,9 @@ def load_file(filename):
 
             # End of document: organize the data, append to output, reset variables for next document.
             elif len(cols) == 2:
-                doc = fix_coref_spans(Document(tokens, utts_corefs, utts_speakers, genre))
+                doc = fix_coref_spans(Document(raw_text, tokens, utts_corefs, utts_speakers, genre, filename))
                 documents.append(doc)
-                tokens, text, utts_corefs, utts_speakers, index = [], [], [], [], 0
+                raw_text, tokens, text, utts_corefs, utts_speakers, index = [], [], [], [], [], 0
 
             # Inside an utterance: grab text, speaker, coreference information.
             elif len(cols) > 7:
@@ -248,7 +255,7 @@ def load_file(filename):
                             corefs[i]['end'] = index
                 index += 1
             else:
-                # Beginning of document, beginning of file, end of file: nothing to scrape off
+                # Beginning of Documeent, beginning of file, end of file: nothing to scrape off
                 continue
 
     return documents
@@ -286,4 +293,6 @@ def doc_to_tensor(document):
 
 # Load in corpus, lazily load in word vectors.
 train_corpus = read_corpus('../data/train/')
+val_corpus = read_corpus('../data/development/')
+test_corpus = read_corpus('../data/test/')
 VECTORS = LazyVectors.from_corpus(train_corpus.vocab)

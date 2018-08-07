@@ -12,16 +12,18 @@ from torchtext.vocab import Vectors
 import random
 import numpy as np
 import networkx as nx
+from tqdm import tqdm
+from random import sample
+from datetime import datetime
+from subprocess import Popen, PIPE
 from boltons.iterutils import pairwise
 from loader import *
 from utils import *
-from tqdm import tqdm
-from random import sample
-from subprocess import Popen, PIPE
 
 
 class Score(nn.Module):
-    """ Generic scoring module """
+    """ Generic scoring module
+    """
     def __init__(self, embeds_dim, hidden_dim=150):
         super().__init__()
 
@@ -67,8 +69,8 @@ class Distance(nn.Module):
 
 
 class Genre(nn.Module):
-    """ Learned continuous representations for genre.
-    Zeros if genre unknown. """
+    """ Learned continuous representations for genre. Zeros if genre unknown.
+    """
 
     genres = ['bc', 'bn', 'mz', 'nw', 'pt', 'tc', 'wb']
     _stoi = {genre: idx+1 for idx, genre in enumerate(genres)}
@@ -92,8 +94,9 @@ class Genre(nn.Module):
 
 
 class Speaker(nn.Module):
-    """ Learned continuous representations for binary speaker.
-    Zeros if speaker unknown. """
+    """ Learned continuous representations for binary speaker. Zeros if speaker unknown.
+    """
+
     def __init__(self, speaker_dim=20):
         super().__init__()
 
@@ -120,7 +123,8 @@ class Speaker(nn.Module):
 
 
 class CharCNN(nn.Module):
-    """ Character-level CNN. Contains character embeddings. """
+    """ Character-level CNN. Contains character embeddings.
+    """
 
     unk_idx = 1
     vocab = train_corpus.char_vocab
@@ -130,18 +134,16 @@ class CharCNN(nn.Module):
     def __init__(self, filters, char_dim=8):
         super().__init__()
 
-        self.embeddings = nn.Embedding(len(self.vocab)+2,
-                                       char_dim,
-                                       padding_idx=0)
+        self.embeddings = nn.Embedding(len(self.vocab)+2, char_dim, padding_idx=0)
         self.convs = nn.ModuleList([nn.Conv1d(in_channels=self.pad_size,
                                               out_channels=filters,
                                               kernel_size=n) for n in (3,4,5)])
         self.cnn_dropout = nn.Dropout(0.20)
 
-    def forward(self, doc):
-        """ Compute character-level features for each doc token """
-        embedded = self.embeddings(self.doc_to_batch(doc))
-        convolved = torch.cat([F.relu(c(embedded)) for c in self.convs], dim=2)
+    def forward(self, *args):
+        """ Compute filter-dimensional character-level features for each doc token """
+        embedded = self.embeddings(self.doc_to_batch(*args))
+        convolved = torch.cat([F.relu(conv(embedded)) for conv in self.convs], dim=2)
         pooled = F.max_pool1d(convolved, convolved.shape[2])
         output = self.cnn_dropout(pooled).squeeze()
         return output
@@ -174,8 +176,9 @@ class CharCNN(nn.Module):
 
 
 class DocumentEncoder(nn.Module):
+    """ Document encoder for tokens
+    """
     def __init__(self, hidden_dim, char_filters):
-        """ Document encoder for tokens """
         super().__init__()
 
         weights = VECTORS.weights()
@@ -184,8 +187,7 @@ class DocumentEncoder(nn.Module):
         self.embeddings.weight.data.copy_(weights)
         self.char_embeddings = CharCNN(char_filters)
 
-        self.lstm = nn.LSTM(weights.shape[1], hidden_dim,
-                            bidirectional=True, batch_first=True)
+        self.lstm = nn.LSTM(weights.shape[1], hidden_dim, bidirectional=True, batch_first=True)
         self.emb_dropout, self.lstm_dropout = nn.Dropout(0.50), nn.Dropout(0.20)
 
     def forward(self, document):
@@ -209,7 +211,8 @@ class DocumentEncoder(nn.Module):
 
 
 class MentionScore(nn.Module):
-    """ Mention scoring module """
+    """ Mention scoring module
+    """
     def __init__(self, gi_dim, attn_dim, distance_dim):
         super().__init__()
 
@@ -234,6 +237,7 @@ class MentionScore(nn.Module):
             speaker = s_to_speaker(span, document.speakers)
 
             # Embeddings, hidden states, raw attn scores for tokens
+            # Slicing slows performance. Unsure if this is batch-able.
             span_embeds = embeds[i1:i2+1]
             span_attn = attns[i1:i2+1]
 
@@ -262,7 +266,8 @@ class MentionScore(nn.Module):
 
 
 class PairwiseScore(nn.Module):
-    """ Coreference pair scoring module """
+    """ Coreference pair scoring module
+    """
     def __init__(self, gij_dim, distance_dim, genre_dim, speaker_dim):
         super().__init__()
 
@@ -274,7 +279,6 @@ class PairwiseScore(nn.Module):
 
     def forward(self, spans, genre, K=250):
         """ Compute pairwise score for spans and their up to K antecedents
-
         """
         # Consider only top K antecedents
         spans = [
@@ -315,8 +319,8 @@ class PairwiseScore(nn.Module):
 
         # Update spans with set of possible antecedents' indices
         spans = [
-            attr.evolve(span, yi_idx = [((y.i1, y.i2), (span.i1, span.i2))
-            for y in span.yi])
+            attr.evolve(span, yi_idx=[((y.i1, y.i2), (span.i1, span.i2))
+                                        for y in span.yi])
             for span in spans_ij
         ]
 
@@ -324,7 +328,8 @@ class PairwiseScore(nn.Module):
 
 
 class CorefScore(nn.Module):
-    """ Super class to compute coreference links between spans """
+    """ Super class to compute coreference links between spans
+    """
     def __init__(self, embeds_dim,
                        hidden_dim,
                        char_filters=50,
@@ -369,9 +374,10 @@ class CorefScore(nn.Module):
 
 
 class Trainer:
-    """ Class dedicated to training and evaluating the model """
-    def __init__(self, train_corpus, model, lr=1e-3):
-        self.train_corpus = list(train_corpus)
+    """ Class dedicated to training and evaluating the model 
+    """
+    def __init__(self, model, train_corpus, val_corpus, test_corpus, lr=1e-3):
+        self.__dict__.update(locals())
         self.model = to_cuda(model)
 
         self.optimizer = optim.Adam(params=[p for p in self.model.parameters()
@@ -385,6 +391,13 @@ class Trainer:
         """ Train a model """
         for epoch in range(1, num_epochs+1):
             self.train_epoch(epoch, *args, **kwargs)
+            # Evaluate every now and then
+            if epoch % 10 == 0:
+                print('\n\nEVALUATION\n\n')
+                self.model.eval()
+                self.save_model(datetime.now())
+                results = self.evaluate(self.val_corpus)
+                print(results)
 
     def train_epoch(self, epoch, steps=25):
         """ Run a training epoch over 'steps' documents """
@@ -394,33 +407,42 @@ class Trainer:
         # Randomly sample documents from the train corpus
         docs = random.sample(self.train_corpus, steps)
 
-        epoch_loss, epoch_recall = [], []
+        epoch_loss, epoch_mentions, epoch_corefs = [], [], []
         for doc in tqdm_notebook(docs):
 
             # Randomly truncate document to up to 50 sentences
             document = doc.truncate()
 
             # Compute loss, number gold links found, total gold links
-            loss, recall, total_golds = self.train_doc(document)
+            loss, mentions_found, total_mentions, corefs_found, total_corefs = self.train_doc(document)
 
             # Track stats by document for debugging
-            print(document, '| Loss: %f | Coreferences found: %d | Total Coreferences: %d' % (loss, recall, total_golds))
-            epoch_loss.append(loss), epoch_recall.append(recall)
+            print(document, '| Loss: %f | Mentions found: %d/%d | Coreferences found: %d/%d' % (loss,
+                                                                                                mentions_found, total_mentions,
+                                                                                                corefs_found, total_corefs))
+
+            epoch_loss.append(loss)
+            epoch_mentions.append(mentions_found/total_mentions)
+            epoch_corefs.append(corefs_found/total_corefs)
 
             # Step the learning rate decrease scheduler
             self.scheduler.step()
 
-        print('Epoch: %d | Loss: %f | Recall: %f' % (epoch, np.mean(epoch_loss), np.mean(epoch_recall)))
+        print('Epoch: %d | Loss: %f | Mention recall: %f | Coref recall: %f' % (epoch,
+                                                                                np.mean(epoch_loss),
+                                                                                np.mean(epoch_mentions),
+                                                                                np.mean(epoch_corefs)))
 
     def train_doc(self, document, CLIP=5):
         """ Compute loss for a forward pass over a document """
+        
         # Extract gold coreference links
-        gold_corefs, total_golds = extract_gold_corefs(document)
+        gold_corefs, total_corefs, total_mentions = extract_gold_corefs(document)
 
         # Zero out optimizer gradients
         self.optimizer.zero_grad()
 
-        losses, golds_found = [], []
+        losses, mentions_found, corefs_found = [], [], []
         for span in self.model(document):
 
             # Check which of these tuples are in the gold set, if any
@@ -433,7 +455,9 @@ class Trainer:
             if not gold_idx:
                 gold_idx = [len(span.sij)-1]
             else:
-                golds_found.append(len(gold_idx))
+                mentions_found.append(len(gold_idx))
+                found_corefs = [score for score in enumerate(span.sij) if score > 0.]
+                corefs_found.append(len(found_corefs))
 
             # Conditional probability distribution over all possible previous spans
             probs = F.softmax(span.sij, dim=0)
@@ -449,101 +473,109 @@ class Trainer:
         loss.backward()
 
         # Clip parameters
-        nn.utils.clip_grad_norm_(self.model.parameters(), CLIP)
+#         nn.utils.clip_grad_norm_(self.model.parameters(), CLIP)
 
         # Step the optimizer
         self.optimizer.step()
 
         # Compute recall
-        recall = sum(golds_found)
+        mentions_found = sum(mentions_found)
+        corefs_found = sum(corefs_found)
 
-        return loss.item(), recall, total_golds
+        return loss.item(), mentions_found, total_mentions, corefs_found, total_corefs
+    
+    def evaluate(self, val_corpus, eval_script='../src/eval/scorer.pl'):
+        """ Evaluate a corpus of CoNLL-2012 gold files """
+        
+        # Predict files
+        print('Evaluating on validation corpus...')
+        predicted_docs = [self.predict(doc) for doc in tqdm(val_corpus)]
+        val_corpus.docs = predicted_docs
+        
+        # Output results
+        golds_file, preds_file = self.to_conll(val_corpus, eval_script)
 
+        # Run perl script
+        print('Running Perl evaluation script...')
+        p = Popen([eval_script, 'all', golds_file, preds_file], stdout=PIPE)
+        stdout, stderr = p.communicate()
+        results = str(stdout).split('TOTALS')[-1]
+
+        # Write the results out for later viewing
+        with open('../preds/results.txt', 'w') as f:
+            f.write(results)
+        
+        return results
+    
     def predict(self, document):
-        """ Predict coreference links in a document """
+        """ Predict coreference clusters in a document """
+        
         graph = nx.Graph()
         spans = self.model(document)
         for i, span in enumerate(spans):
 
-            found_corefs = [idx
-                            for idx, score in enumerate(span.sij)
+            found_corefs = [idx 
+                            for idx, score in enumerate(span.sij) 
                             if score > 0.]
 
             if any(found_corefs):
+                
                 for coref_idx in found_corefs:
                     link = spans[coref_idx]
                     graph.add_edge((span.i1, span.i2), (link.i1, link.i2))
+        
+        clusters = list(nx.connected_components(graph))
+        
+        # Cluster found coreferences
+        doc_tags = [[] for _ in range(len(document))]
 
-        return list(nx.connected_components(graph))
+        for idx, cluster in enumerate(clusters):
+            for i1, i2 in cluster:
 
-    def evalute(self, test_file, eval_script='../src/eval/scorer.pl'):
-        """ Evaluate a CoNLL-2012 gold file """
+                if i1 == i2:
+                    doc_tags[i1].append(f'({idx})')
 
+                else:
+                    doc_tags[i1].append(f'({idx}')
+                    doc_tags[i2].append(f'{idx})')
+
+        document.tags = ['|'.join(t) if t else '-' for t in doc_tags]
+
+        return document
+
+    def to_conll(self, val_corpus, eval_script):
+        """ Write to out_file the predictions, return CoNLL metrics results """
+        
         # Make predictions directory if there isn't one already
-        out_file = '../preds/' + test_file.split('/')[-1] + '.pred.txt'
+        golds_file, preds_file = '../preds/golds.txt', '../preds/predictions.txt'
         if not os.path.exists('../preds/'):
             os.makedirs('../preds/')
-
-        # Load file
-        docs = load_file(test_file)
-
-        # Predict file
-        tags = self.doc_pred(docs)
-
-        # Output results
-        self.to_conll(test_file, out_file, tags, eval_script)
-
-        # Run perl script
-        p = Popen([eval_script, 'all', out_file, test_file], stdout=PIPE)
-        stdout, stderr = p.communicate()
-        return str(stdout).split('TOTALS')[-1]
-
-    def doc_pred(self, docs):
-        """ Predict and extract coreference links in a set of documents """
-        #TODO: there's a bug in here
-        all_tags = []
-        for document in tqdm_notebook(docs):
-
-            # Predict span clusters
-            clusters = self.predict(document)
-
-            # Predictions
-            tags = [[] for _ in range(len(document))]
-
-            for idx, cluster in enumerate(clusters):
-                for i1, i2 in cluster:
-
-                    if i1 == i2:
-                        tags[i1].append(f'({idx})')
-
-                    else:
-                        tags[i1].append(f'({idx}')
-                        tags[i2].append(f'{idx})')
-
-            tags = ['|'.join(t) if t else '-' for t in tags]
-            all_tags.extend(tags)
-
-        return all_tags
-
-    def to_conll(self, conll_file, pred_file, all_tags, eval_script):
-        """ Write to predictions file """
-        with open(pred_file, 'w') as f:
+        
+        # Combine all gold files into a single file (Perl script requires this)
+        golds_file_content = flatten([doc.raw_text for doc in val_corpus])
+        with open(preds_file, 'w') as f:
+            for line in golds_file_content:
+                f.write(line)
+        
+        # Dump predictions
+        with open(out_file, 'w') as f:
+            
             current_idx = 0
-            for line in conll_file:
-                if line.startswith('#begin') or line.startswith('#end') or line == '\n':
-                    f.write(line)
-                    continue
-                else:
-                    tokens = line.split()
-                    tokens[-1] = all_tags[current_idx]
-                    current_idx += 1
-                    output = '\t'.join(tokens)
-                    f.write(output)
-                f.write('\n')
-
-        p = Popen([eval_script, 'all', conll_file, pred_file], stdout=PIPE)
-        stdout, stderr = p.communicate()
-        return str(stdout).split('TOTALS')[-1]
+            for doc in val_corpus:
+                
+                for line in doc.raw_text:
+                    
+                    if line.startswith('#begin') or line.startswith('#end') or line == '\n':
+                        f.write(line)
+                        continue
+                    else:
+                        tokens = line.split()
+                        tokens[-1] = doc.tags[current_idx]
+                        current_idx += 1
+                        f.write('\t'.join(tokens))
+                    f.write('\n')
+                    
+        return golds_file, preds_file
 
     def save_model(self, savepath):
         """ Save model state dictionary """
@@ -558,5 +590,6 @@ class Trainer:
 
 # Initialize model, train
 model = CorefScore(embeds_dim=350, hidden_dim=200)
-trainer = Trainer(train_corpus, model)
-trainer.train(num_epochs=100, steps=25)
+trainer = Trainer(model, train_corpus, val_corpus, test_corpus)
+trainer.load_model('with_spkrs.pth')
+trainer.train(100)
