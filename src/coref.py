@@ -581,25 +581,31 @@ class Trainer:
 
         # Combine all gold files into a single file (Perl script requires this)
         golds_file_content = flatten([doc.raw_text for doc in val_corpus])
-        with open(preds_file, 'w') as f:
+        with io.open(preds_file, 'w', encoding='utf-8', errors='strict') as f:
             for line in golds_file_content:
                 f.write(line)
 
         # Dump predictions
-        with open(out_file, 'w') as f:
+        with io.open(filename, 'w', encoding='utf-8', errors='strict') as f:
 
             current_idx = 0
             for doc in val_corpus:
 
                 for line in doc.raw_text:
 
+                    # Indicates start / end of document or line break
                     if line.startswith('#begin') or line.startswith('#end') or line == '\n':
                         f.write(line)
                         continue
                     else:
+                        # Replace the coref column entry with the predicted tag
                         tokens = line.split()
                         tokens[-1] = doc.tags[current_idx]
+
+                        # Increment by 1 so tags are still aligned
                         current_idx += 1
+
+                        # Rewrite it back out
                         f.write('\t'.join(tokens))
                     f.write('\n')
 
