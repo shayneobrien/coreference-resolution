@@ -59,7 +59,8 @@ def extract_gold_corefs(document):
     gold_links = defaultdict(list)
 
     # Compute number of mentions
-    total_mentions = len(set([coref['span'] for coref in document.corefs]))
+    gold_mentions = set([coref['span'] for coref in document.corefs])
+    total_mentions = len(gold_mentions)
 
     # Compute number of coreferences
     for coref_entry in document.corefs:
@@ -70,7 +71,6 @@ def extract_gold_corefs(document):
         # All spans corresponding to the same label
         gold_links[label].append(span_idx) # get all spans corresponding to some label
 
-
     # Flatten all possible corefs, sort, get number
     gold_corefs = flatten([[coref
                             for coref in combinations(gold, 2)]
@@ -78,7 +78,7 @@ def extract_gold_corefs(document):
     gold_corefs = sorted(gold_corefs)
     total_corefs = len(gold_corefs)
 
-    return gold_corefs, total_corefs, total_mentions
+    return gold_corefs, total_corefs, gold_mentions, total_mentions
 
 def fix_coref_spans(doc):
     """ Add in token spans to corefs dict.
@@ -100,6 +100,11 @@ def s_to_speaker(span, speakers):
     if speakers[i1] == speakers[i2]:
         return speakers[i1]
     return None
+
+def safe_divide(x, y):
+    if y != 0:
+        return x / y
+    return 1
 
 def flatten(alist):
     """ Flatten a list of lists into one list """

@@ -72,7 +72,9 @@ class Document:
         if len(sentences) > MAX:
             i = random.sample(range(MAX, len(sentences)), 1)[0]
             tokens = self.tokens[sentences[i-50]:sentences[i]]
-            return self.__class__(tokens, c(self.corefs), c(self.speakers), c(self.genre))
+            return self.__class__(c(self.raw_text), tokens,
+                                    c(self.corefs), c(self.speakers),
+                                    c(self.genre), c(self.filename))
         return self
 
 
