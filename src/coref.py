@@ -183,9 +183,17 @@ class DocumentEncoder(nn.Module):
         super().__init__()
 
         weights = VECTORS.weights()
+        turian_weights = TURIAN.weights()
 
+        # GLoVE
         self.embeddings = nn.Embedding(weights.shape[0], weights.shape[1])
         self.embeddings.weight.data.copy_(weights)
+
+        # Turian
+        self.turian = nn.Embedding(turian_weights.shape[0], turian_weights.shape[1])
+        self.turian.weight.data.copy_(turian_weights)
+
+        # Character
         self.char_embeddings = CharCNN(char_filters)
 
         self.lstm = nn.LSTM(weights.shape[1], hidden_dim, bidirectional=True, batch_first=True)
@@ -194,15 +202,23 @@ class DocumentEncoder(nn.Module):
     def forward(self, document):
         """ Convert document words to ids, embed them, pass through LSTM. """
         # Convert document tokens to look up ids
-        tensor = doc_to_tensor(document)
+        tensor = doc_to_tensor(document, VECTORS)
         tensor = tensor.unsqueeze(0)
 
         # Embed the tokens, regularize
         embeds = self.embeddings(tensor)
         embeds = self.emb_dropout(embeds)
 
+        # Convert document tokens to Turian look up IDs #TODO: align with GLoVE
+        tur_tensor = doc_to_tensor(document, TURIAN)
+        tur_tensor = tur_tensor.unsqueeze(0)
+
+        # Embed again
+        tur_embeds = self.turian(tur_tensor)
+        tur_embeds = self.emb_dropout(tur_embeds)
+
         char_embeds = self.char_embeddings(document).unsqueeze(0)
-        full_embeds = torch.cat((embeds, char_embeds), dim=2)
+        full_embeds = torch.cat((embeds, tur_embeds, char_embeds), dim=2)
 
         # Pass an LSTM over the embeds, regularize
         states, _ = self.lstm(embeds)
@@ -377,7 +393,8 @@ class CorefScore(nn.Module):
 class Trainer:
     """ Class dedicated to training and evaluating the model
     """
-    def __init__(self, model, train_corpus, val_corpus, test_corpus, lr=1e-3):
+    def __init__(self, model, train_corpus, val_corpus, test_corpus,
+                    lr=1e-3, steps=100):
         self.__dict__.update(locals())
         self.train_corpus = list(self.train_corpus)
         self.model = to_cuda(model)
@@ -397,17 +414,17 @@ class Trainer:
             if epoch % 10 == 0:
                 print('\n\nEVALUATION\n\n')
                 self.model.eval()
-                self.save_model(datetime.now())
+                self.save_model(str(datetime.now()))
                 results = self.evaluate(self.val_corpus)
                 print(results)
 
-    def train_epoch(self, epoch, steps=25):
+    def train_epoch(self, epoch):
         """ Run a training epoch over 'steps' documents """
         # Set model to train (enables dropout)
         self.model.train()
 
         # Randomly sample documents from the train corpus
-        docs = random.sample(self.train_corpus, steps)
+        docs = random.sample(self.train_corpus, self.steps)
 
         epoch_loss, epoch_mentions, epoch_corefs, epoch_identified = [], [], [], []
         for doc in tqdm(docs):
@@ -599,6 +616,6 @@ class Trainer:
 
 
 # Initialize model, train
-model = CorefScore(embeds_dim=350, hidden_dim=200)
+model = CorefScore(embeds_dim=400, hidden_dim=200)
 trainer = Trainer(model, train_corpus, val_corpus, test_corpus)
 trainer.train(100)

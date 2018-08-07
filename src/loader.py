@@ -114,10 +114,10 @@ class LazyVectors:
 
     unk_idx = 1
 
-    def __init__(self, name='glove.840B.300d.txt',
-                         cache='/Users/sob/github/.vector_cache/',
-                         skim=None,
-                         vocab=None):
+    def __init__(self, name,
+                       cache,
+                       skim=None,
+                       vocab=None):
         """  Requires the glove vectors to be in a folder named .vector_cache
         Setup:
             >> cd ~/where_you_want_to_save
@@ -142,8 +142,10 @@ class LazyVectors:
             self.set_vocab(vocab)
 
     @classmethod
-    def from_corpus(cls, corpus_vocabulary):
-        return cls(vocab=corpus_vocabulary)
+    def from_corpus(cls, corpus_vocabulary,
+                         name='glove.840B.300d.txt',
+                         cache='/Users/sob/github/.vector_cache/'):
+        return cls(name=name, cache=cache, vocab=corpus_vocabulary)
 
     @cached_property
     def loader(self):
@@ -284,17 +286,17 @@ def clean_token(token):
         cleaned_token = ","
     return cleaned_token
 
-def token_to_id(token):
-    """ Lookup word ID for a token """
-    return VECTORS.stoi(token)
-
-def doc_to_tensor(document):
+def doc_to_tensor(document, vectorizer):
     """ Convert a sentence to a tensor """
-    return to_cuda(torch.tensor([token_to_id(token)
+    return to_cuda(torch.tensor([vectorizer.stoi(token)
                                  for token in document.tokens]))
 
 # Load in corpus, lazily load in word vectors.
 train_corpus = read_corpus('../data/train/')
 val_corpus = read_corpus('../data/development/')
 test_corpus = read_corpus('../data/test/')
+
 VECTORS = LazyVectors.from_corpus(train_corpus.vocab)
+TURIAN = LazyVectors.from_corpus(train_corpus.vocab,
+                                 name='hlbl-embeddings-scaled.EMBEDDING_SIZE=50',
+                                 cache='/Users/sob/github/.vector_cache/')
