@@ -180,7 +180,7 @@ class CharCNN(nn.Module):
 class DocumentEncoder(nn.Module):
     """ Document encoder for tokens
     """
-    def __init__(self, hidden_dim, char_filters):
+    def __init__(self, hidden_dim, char_filters, num_layers=2):
         super().__init__()
 
         weights = VECTORS.weights()
@@ -197,7 +197,15 @@ class DocumentEncoder(nn.Module):
         # Character
         self.char_embeddings = CharCNN(char_filters)
 
-        self.lstm = nn.LSTM(weights.shape[1], hidden_dim, bidirectional=True, batch_first=True)
+        # LSTM
+        input_dim = weights.shape[1] + turian_weights.shape[1] + char_filters
+        self.lstm = nn.LSTM(input_dim,
+                            hidden_dim,
+                            num_layers=num_layers,
+                            bidirectional=True,
+                            batch_first=True)
+
+        # Dropout
         self.emb_dropout, self.lstm_dropout = nn.Dropout(0.50), nn.Dropout(0.20)
 
     def forward(self, document):
@@ -222,7 +230,7 @@ class DocumentEncoder(nn.Module):
         full_embeds = torch.cat((embeds, tur_embeds, char_embeds), dim=2)
 
         # Pass an LSTM over the embeds, regularize
-        states, _ = self.lstm(embeds)
+        states, _ = self.lstm(full_embeds)
         states = self.lstm_dropout(states)
 
         return states.squeeze(), full_embeds.squeeze()
@@ -434,13 +442,13 @@ class Trainer:
             document = doc.truncate()
 
             # Compute loss, number gold links found, total gold links
-            loss, mentions_found, total_mentions, corefs_found, total_corefs, corefs_chosen = self.train_doc(document)
+            loss, mentions_found, total_mentions, \
+                corefs_found, total_corefs, corefs_chosen = self.train_doc(document)
 
             # Track stats by document for debugging
-            print(document, '| Loss: %f | Mentions found: %d/%d | Coreferences found: %d/%d | Corefs chosen: %d/%d' % (loss,
-                                                                                                                        mentions_found, total_mentions,
-                                                                                                                        corefs_found, total_corefs,
-                                                                                                                        corefs_chosen, total_corefs))
+            print(document, '| Loss: %f | Mentions: %d/%d | Coref recall: %d/%d | Corefs precision: %d/%d' \
+                % (loss, mentions_found, total_mentions,
+                    corefs_found, total_corefs, corefs_chosen, total_corefs))
 
             epoch_loss.append(loss)
             epoch_mentions.append(safe_divide(mentions_found, total_mentions))
@@ -450,17 +458,16 @@ class Trainer:
             # Step the learning rate decrease scheduler
             self.scheduler.step()
 
-        print('Epoch: %d | Loss: %f | Mention recall: %f | Coref recall: %f | Coref identifications: %f' % (epoch,
-                                                                                                            np.mean(epoch_loss),
-                                                                                                            np.mean(epoch_mentions),
-                                                                                                            np.mean(epoch_corefs),
-                                                                                                            np.mean(epoch_identified)))
+        print('Epoch: %d | Loss: %f | Mention recall: %f | Coref recall: %f | Coref precision: %f' \
+                % (epoch, np.mean(epoch_loss), np.mean(epoch_mentions),
+                    np.mean(epoch_corefs), np.mean(epoch_identified)))
 
     def train_doc(self, document, CLIP=5):
         """ Compute loss for a forward pass over a document """
 
         # Extract gold coreference links
-        gold_corefs, total_corefs, gold_mentions, total_mentions = extract_gold_corefs(document)
+        gold_corefs, total_corefs, \
+            gold_mentions, total_mentions = extract_gold_corefs(document)
 
         # Zero out optimizer gradients
         self.optimizer.zero_grad()
@@ -510,7 +517,8 @@ class Trainer:
         corefs_found = sum(corefs_found)
         corefs_chosen = sum(corefs_chosen)
 
-        return loss.item(), mentions_found, total_mentions, corefs_found, total_corefs, corefs_chosen
+        return (loss.item(), mentions_found, total_mentions,
+                corefs_found, total_corefs, corefs_chosen)
 
     def evaluate(self, val_corpus, eval_script='../src/eval/scorer.pl'):
         """ Evaluate a corpus of CoNLL-2012 gold files """
