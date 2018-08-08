@@ -91,6 +91,9 @@ class Span:
     # Speaker
     speaker = attr.ib(default=None)
 
+    # Genre
+    genre = attr.ib(default=None)
+
     # Unary mention score, as tensor
     si = attr.ib(default=None)
 
