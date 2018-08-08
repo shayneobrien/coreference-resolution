@@ -202,7 +202,7 @@ class DocumentEncoder(nn.Module):
 
     def forward(self, document):
         """ Convert document words to ids, embed them, pass through LSTM. """
-        # Convert document tokens to look up ids
+        # Convert document tokens to look up idsbbn
         tensor = doc_to_tensor(document, VECTORS)
         tensor = tensor.unsqueeze(0)
 
@@ -581,12 +581,12 @@ class Trainer:
 
         # Combine all gold files into a single file (Perl script requires this)
         golds_file_content = flatten([doc.raw_text for doc in val_corpus])
-        with io.open(preds_file, 'w', encoding='utf-8', errors='strict') as f:
+        with io.open(golds_file, 'w', encoding='utf-8', errors='strict') as f:
             for line in golds_file_content:
                 f.write(line)
 
         # Dump predictions
-        with io.open(filename, 'w', encoding='utf-8', errors='strict') as f:
+        with io.open(preds_file, 'w', encoding='utf-8', errors='strict') as f:
 
             current_idx = 0
             for doc in val_corpus:
