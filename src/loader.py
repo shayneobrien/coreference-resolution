@@ -64,18 +64,33 @@ class Document:
 
     @cached_property
     def spans(self):
-        return compute_idx_spans(self.tokens)
+        return [Span(i1=i[0], i2=i[-1], id=idx,
+                    speaker=self.speaker(i), genre=self.genre)
+                for idx, i in enumerate(compute_idx_spans(self.tokens))]
+
+    @cached_property
+    def widths(self):
+        return [s.len for s in self.spans]
 
     def truncate(self, MAX=50):
         """ Randomly truncate the document to up to MAX sentences """
-        sentences = [idx for idx, token in enumerate(self.tokens) if token in ['.', '?', '!']]
+        sentences = [idx
+                     for idx, token in enumerate(self.tokens)
+                     if token in ['.', '?', '!']]
+
         if len(sentences) > MAX:
             i = random.sample(range(MAX, len(sentences)), 1)[0]
             tokens = self.tokens[sentences[i-50]:sentences[i]]
             return self.__class__(c(self.raw_text), tokens,
-                                    c(self.corefs), c(self.speakers),
-                                    c(self.genre), c(self.filename))
+                                  c(self.corefs), c(self.speakers),
+                                  c(self.genre), c(self.filename))
         return self
+
+    def speaker(self, i):
+        """ Compute speaker of a span """
+        if self.speakers[i[0]] == self.speakers[i[-1]]:
+            return self.speakers[i[0]]
+        return None
 
 
 @attr.s(frozen=True, repr=False)
@@ -85,17 +100,20 @@ class Span:
     i1 = attr.ib()
     i2 = attr.ib()
 
-    # Span embedding tensor
-    g = attr.ib()
+    # Id within total spans (for indexing into a batch computation)
+    id = attr.ib()
 
     # Speaker
-    speaker = attr.ib(default=None)
+    speaker = attr.ib()
 
     # Genre
-    genre = attr.ib(default=None)
+    genre = attr.ib()
 
     # Unary mention score, as tensor
     si = attr.ib(default=None)
+
+    # Span representation
+    g = attr.ib(default=None)
 
     # List of candidate antecedent spans
     yi = attr.ib(default=None)
@@ -106,8 +124,12 @@ class Span:
     # Corresponding span ids to each yi
     yi_idx = attr.ib(default=None)
 
+    @cached_property
+    def len(self):
+        return self.i2-self.i1+1
+
     def __repr__(self):
-        return 'Span representing %d tokens' % (self.i2-self.i1+1)
+        return 'Span representing %d tokens' % (self.len)
 
 
 class LazyVectors:

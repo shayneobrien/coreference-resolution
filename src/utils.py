@@ -45,7 +45,7 @@ def pad_and_pack(tensors):
     # Pack the variables to mask the padding
     return pack(padded, sizes)
 
-def pad_and_stack(tensors, pad_size=None):
+def pad_and_stack(tensors, pad_size=None, value=0):
     """ Pad and stack an uneven tensor of token lookup ids.
     Assumes num_sents in first dimension (batch_first=True)"""
 
@@ -57,7 +57,9 @@ def pad_and_stack(tensors, pad_size=None):
         pad_size = max(sizes)
 
     # Pad all sentences to the max observed size
-    padded = torch.stack([F.pad(sent[:pad_size], (0, 0, 0, max(0, pad_size-size)))
+    padded = torch.stack([F.pad(input=sent[:pad_size],
+                                pad=(0, 0, 0, max(0, pad_size-size)),
+                                value=value)
                           for sent, size in zip(tensors, sizes)], dim=0)
 
     return padded, sizes
@@ -155,9 +157,8 @@ def compute_idx_spans(tokens, L=10):
 
 def s_to_speaker(span, speakers):
     """ Compute speaker of a span """
-    i1, i2 = span[0], span[-1]
-    if speakers[i1] == speakers[i2]:
-        return speakers[i1]
+    if speakers[span.i1] == speakers[span.i2]:
+        return speakers[span.i1]
     return None
 
 def speaker_label(s1, s2):
