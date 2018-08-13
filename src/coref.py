@@ -351,9 +351,10 @@ class PairwiseScore(nn.Module):
         sij_scores = (si + sj + pairwise_scores).squeeze()
 
         # Update spans with set of possible antecedents' indices, scores
+        #TODO: can we avoid splitting tensors here?
         spans = [
             attr.evolve(span,
-                        sij=torch.cat((sij_scores[i1:i2], to_var(torch.tensor([0.]))), dim=0),
+                        sij=torch.cat((sij_scores[i1:i2], to_var(torch.tensor([0.]))), dim=0).detach(),
                         yi_idx=[((y.i1, y.i2), (span.i1, span.i2)) for y in span.yi]
                        )
             for span, (i1, i2) in zip(spans, pairwise_indexes(spans))
