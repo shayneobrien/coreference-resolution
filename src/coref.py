@@ -183,7 +183,7 @@ class DocumentEncoder(nn.Module):
         # Character
         self.char_embeddings = CharCNN(char_filters)
 
-        # Graf
+        # Sentence-LSTM
         self.lstm = nn.LSTM(weights.shape[1]+turian_weights.shape[1]+char_filters,
                             hidden_dim,
                             num_layers=n_layers,
@@ -273,9 +273,11 @@ class MentionScore(nn.Module):
         # Compute span widths (i.e. lengths), embed them
         widths = self.width(doc.widths)
 
-        # Cat it all together to get g_i, our span representation
+        # Get LSTM state for start, end indexes
         start_end = torch.stack([torch.cat((states[s.i1], states[s.i2]))
                                  for s in doc.spans])
+
+        # Cat it all together to get g_i, our span representation
         g_i = torch.cat((start_end, attn_embeds, widths), dim=1)
 
         # Compute each span's unary mention score
@@ -284,11 +286,9 @@ class MentionScore(nn.Module):
         # Update span object attributes
         # (use detach so we don't get crazy gradients by splitting the tensors so often)
         spans = [
-            attr.evolve(span,
-                        si=si,
-                        g=g)
-            for idx, (span, si, g)
-            in enumerate(zip(doc.spans, mention_scores.detach(), g_i.detach()))
+            attr.evolve(span, si=si)
+            for idx, (span, si)
+            in enumerate(zip(doc.spans, mention_scores.detach()))
         ]
 
         # Prune down to LAMBDA*len(doc) spans
@@ -296,8 +296,7 @@ class MentionScore(nn.Module):
 
         # Update antencedent set (yi) for each mention
         spans = [
-            attr.evolve(span,
-                        yi=spans[max(0, idx-K):idx])
+            attr.evolve(span, yi=spans[max(0, idx-K):idx])
             for idx, span in enumerate(spans)
         ]
 
@@ -651,6 +650,5 @@ class Trainer:
 
 # Initialize model, train
 model = CorefScore(embeds_dim=400, hidden_dim=200)
-trainer = Trainer(model, train_corpus, val_corpus, test_corpus,
-                    steps=100) # One full pass over train corpus
-trainer.train(280)
+trainer = Trainer(model, train_corpus, val_corpus, test_corpus, steps=2802)
+trainer.train(150)

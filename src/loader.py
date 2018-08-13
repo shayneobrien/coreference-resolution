@@ -89,19 +89,11 @@ class Document:
         """ Distances between start, end indexes for each span """
         return [len(s) for s in self.spans]
 
-    def truncate(self, MAX=25):
+    def truncate(self, MAX=50):
         """ Randomly truncate the document to up to MAX sentences """
-<<<<<<< HEAD
-        sentences = [idx for idx, token in enumerate(self.tokens) if token in ['.', '?', '!']]
-        if len(sentences) > MAX:
-            i = random.sample(range(MAX, len(sentences)), 1)[0]
-            tokens = self.tokens[sentences[i-MAX]:sentences[i]]
-=======
-
         if len(self.sents) > MAX:
             i = random.sample(range(MAX, len(self.sents)), 1)[0]
             tokens = flatten(self.sents[i-MAX:i])
->>>>>>> batch
             return self.__class__(c(self.raw_text), tokens,
                                   c(self.corefs), c(self.speakers),
                                   c(self.genre), c(self.filename))
