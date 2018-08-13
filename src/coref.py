@@ -16,8 +16,8 @@ from random import sample
 from datetime import datetime
 from subprocess import Popen, PIPE
 from boltons.iterutils import pairwise
-from src.loader import *
-from src.utils import *
+from loader import *
+from utils import *
 
 
 class Score(nn.Module):
@@ -128,12 +128,12 @@ class CharCNN(nn.Module):
                                               kernel_size=n) for n in (3,4,5)])
         self.cnn_dropout = nn.Dropout(0.20)
 
-    def forward(self, *args):
+    def forward(self, sent):
         """ Compute filter-dimensional character-level features for each doc token """
-        embedded = self.embeddings(self.sent_to_tensor(*args))
+        embedded = self.embeddings(self.sent_to_tensor(sent))
         convolved = torch.cat([F.relu(conv(embedded)) for conv in self.convs], dim=2)
         pooled = F.max_pool1d(convolved, convolved.shape[2])
-        output = self.cnn_dropout(pooled).squeeze()
+        output = self.cnn_dropout(pooled).squeeze(2)
         return output
 
     def sent_to_tensor(self, sent):
@@ -193,11 +193,11 @@ class DocumentEncoder(nn.Module):
         # Dropout
         self.emb_dropout, self.lstm_dropout = nn.Dropout(0.50), nn.Dropout(0.20)
 
-    def forward(self, document):
+    def forward(self, doc):
         """ Convert document words to ids, embed them, pass through LSTM. """
 
         # Embed document
-        embeds = [self.embed(s) for s in document.sents]
+        embeds = [self.embed(s) for s in doc.sents]
 
         # Batch for LSTM
         packed, reorder = pad_and_pack(embeds)
@@ -217,11 +217,11 @@ class DocumentEncoder(nn.Module):
         """ Embed a sentence using GLoVE, Turian, and character embeddings """
 
         # Convert document tokens to look up ids
-        tensor = lookup_tensor(sent, VECTORS)
+        glove_tensor = lookup_tensor(sent, VECTORS)
 
         # Embed the tokens with Glove, apply dropout
-        embeds = self.embeddings(tensor)
-        embeds = self.emb_dropout(embeds)
+        glove_embeds = self.embeddings(glove_tensor)
+        glove_embeds = self.emb_dropout(glove_embeds)
 
         # Convert document tokens to Turian look up IDs
         tur_tensor = lookup_tensor(sent, TURIAN)
@@ -234,9 +234,9 @@ class DocumentEncoder(nn.Module):
         char_embeds = self.char_embeddings(sent)
 
         # Concatenate them all together
-        full_embeds = torch.cat((embeds, tur_embeds, char_embeds), dim=1)
+        embeds = torch.cat((glove_embeds, tur_embeds, char_embeds), dim=1)
 
-        return full_embeds
+        return embeds
 
 
 class MentionScore(nn.Module):
@@ -249,7 +249,7 @@ class MentionScore(nn.Module):
         self.width = Distance(distance_dim)
         self.score = Score(gi_dim)
 
-    def forward(self, states, embeds, document, K=250):
+    def forward(self, states, embeds, doc, K=250):
         """ Compute unary mention score for each span
         """
 
@@ -258,7 +258,7 @@ class MentionScore(nn.Module):
 
         # Regroup attn values, embeds into span representations
         span_attns, span_embeds = zip(*[(attns[s.i1:s.i2+1], embeds[s.i1:s.i2+1])
-                                        for s in document.spans])
+                                        for s in doc.spans])
 
         # Pad and stack span attention values, span embeddings for batching
         padded_attns, _ = pad_and_stack(span_attns, value=-1e10)
@@ -271,11 +271,11 @@ class MentionScore(nn.Module):
         attn_embeds = (padded_embeds * attn_weights).sum(dim=1)
 
         # Compute span widths (i.e. lengths), embed them
-        widths = self.width(document.widths)
+        widths = self.width(doc.widths)
 
         # Cat it all together to get g_i, our span representation
         start_end = torch.stack([torch.cat((states[s.i1], states[s.i2]))
-                                 for s in document.spans])
+                                 for s in doc.spans])
         g_i = torch.cat((start_end, attn_embeds, widths), dim=1)
 
         # Compute each span's unary mention score
@@ -287,18 +287,16 @@ class MentionScore(nn.Module):
             attr.evolve(span,
                         si=si,
                         g=g)
-            for idx, (span, si, g) in enumerate(zip(document.spans, mention_scores.detach(), g_i.detach()))
+            for idx, (span, si, g)
+            in enumerate(zip(doc.spans, mention_scores.detach(), g_i.detach()))
         ]
 
         # Prune down to LAMBDA*len(doc) spans
-        spans = prune(spans, len(document))
+        spans = prune(spans, len(doc))
 
-        # Update antencedents (yi), gradient enabled mention score (si)
-        # and span representation (g)
+        # Update antencedent set (yi) for each mention
         spans = [
             attr.evolve(span,
-                        si=mention_scores[span.id],
-                        g=g_i[span.id],
                         yi=spans[max(0, idx-K):idx])
             for idx, span in enumerate(spans)
         ]
@@ -473,7 +471,7 @@ class Trainer:
                 % (epoch, np.mean(epoch_loss), np.mean(epoch_mentions),
                     np.mean(epoch_corefs), np.mean(epoch_identified)))
 
-    def train_doc(self, document, CLIP=5):
+    def train_doc(self, document):
         """ Compute loss for a forward pass over a document """
 
         # Extract gold coreference links
@@ -504,10 +502,10 @@ class Trainer:
                 found_corefs = [1 for score in span.sij if score > 0.]
                 corefs_chosen.append(len(found_corefs))
 
-            # Conditional probability distribution over all possible previous spans
+            # Conditional probability distribution over antecedents
             probs = F.softmax(span.sij, dim=0)
 
-            # Marginal log-likelihood of correct antecedents implied by gold clustering
+            # Log-likelihood of correct antecedents implied by gold clustering
             mass = torch.log(sum([probs[i] for i in gold_idx]))
 
             # Save the loss for this span
@@ -551,41 +549,54 @@ class Trainer:
 
         return results
 
-    def predict(self, document):
+    def predict(self, doc):
         """ Predict coreference clusters in a document """
 
+        # Set to eval mode
+        self.model.eval()
+
+        # Initialize graph (mentions are nodes and edges indicate coref linkage)
         graph = nx.Graph()
-        spans = self.model(document)
+
+        # Pass the document through the model
+        spans = self.model(doc)
+
+        # Cluster found coreference links
         for i, span in enumerate(spans):
 
+            # Loss implicitly pushes coref links above 0, rest below 0
             found_corefs = [idx
                             for idx, score in enumerate(span.sij)
                             if score > 0.]
 
+            # If we have any
             if any(found_corefs):
 
+                # Add edges between all spans in the cluster
                 for coref_idx in found_corefs:
                     link = spans[coref_idx]
                     graph.add_edge((span.i1, span.i2), (link.i1, link.i2))
 
+        # Extract clusters as nodes that share an edge
         clusters = list(nx.connected_components(graph))
 
-        # Cluster found coreferences
-        doc_tags = [[] for _ in range(len(document))]
+        # Initialize token tags
+        token_tags = [[] for _ in range(len(document))]
 
+        # Add in cluster ids for each cluster of corefs in place of token tag
         for idx, cluster in enumerate(clusters):
             for i1, i2 in cluster:
 
                 if i1 == i2:
-                    doc_tags[i1].append(f'({idx})')
+                    token_tags[i1].append(f'({idx})')
 
                 else:
-                    doc_tags[i1].append(f'({idx}')
-                    doc_tags[i2].append(f'{idx})')
+                    token_tags[i1].append(f'({idx}')
+                    token_tags[i2].append(f'{idx})')
 
-        document.tags = ['|'.join(t) if t else '-' for t in doc_tags]
+        doc.tags = ['|'.join(t) if t else '-' for t in token_tags]
 
-        return document
+        return doc
 
     def to_conll(self, val_corpus, eval_script):
         """ Write to out_file the predictions, return CoNLL metrics results """
@@ -641,5 +652,5 @@ class Trainer:
 # Initialize model, train
 model = CorefScore(embeds_dim=400, hidden_dim=200)
 trainer = Trainer(model, train_corpus, val_corpus, test_corpus,
-                    batch_size=5, steps=560) # One full pass over train corpus
-trainer.train(100)
+                    steps=100) # One full pass over train corpus
+trainer.train(280)

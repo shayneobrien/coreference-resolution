@@ -87,7 +87,7 @@ class Document:
     @cached_property
     def widths(self):
         """ Distances between start, end indexes for each span """
-        return [s.len for s in self.spans]
+        return [len(s) for s in self.spans]
 
     def truncate(self, MAX=50):
         """ Randomly truncate the document to up to MAX sentences """
@@ -138,12 +138,11 @@ class Span:
     # Corresponding span ids to each yi
     yi_idx = attr.ib(default=None)
 
-    @cached_property
-    def len(self):
+    def __len__(self):
         return self.i2-self.i1+1
 
     def __repr__(self):
-        return 'Span representing %d tokens' % (self.len)
+        return 'Span representing %d tokens' % (self.__len__())
 
 
 class LazyVectors:
