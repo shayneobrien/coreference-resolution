@@ -3,6 +3,7 @@ data
 preds
 env
 __pycache__
+.pth
 .vector_cache
 .ipynb_checkpoints
 .DS_Store

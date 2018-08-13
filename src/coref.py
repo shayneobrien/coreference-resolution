@@ -1,7 +1,5 @@
 # TODO:
 # Early stopping
-# No more slicing (is this possible to do..?)
-# Batching documents / convert to sentence LSTM
 
 print('Initializing...')
 import torch
@@ -44,7 +42,8 @@ class Score(nn.Module):
 
 
 class Distance(nn.Module):
-    """ Learned, continuous representations for: span size, width between spans
+    """ Learned, continuous representations for: span widths, distance
+    between spans
     """
 
     bins = [1,2,3,4,8,16,32,64]
@@ -60,12 +59,12 @@ class Distance(nn.Module):
 
     def forward(self, *args):
         """ Embedding table lookup """
-        return self.embeds(self.stoi(*args)).squeeze()
+        return self.embeds(self.stoi(*args))
 
-    def stoi(self, num):
+    def stoi(self, lengths):
         """ Find which bin a number falls into """
-        return to_cuda(torch.tensor(
-            sum([True for i in self.bins if num >= i]), requires_grad=False
+        return to_cuda(torch.tensor([
+            sum([True for i in self.bins if num >= i]) for num in lengths], requires_grad=False
         ))
 
 
@@ -84,15 +83,14 @@ class Genre(nn.Module):
             nn.Dropout(0.20)
         )
 
-    def forward(self, genre):
+    def forward(self, labels):
         """ Embedding table lookup """
-        return self.embeds(self.stoi(genre))
+        return self.embeds(self.stoi(labels))
 
-    def stoi(self, genre):
+    def stoi(self, labels):
         """ Locate embedding id for genre """
-        idx = self._stoi.get(genre)
-        idx = idx if idx else 0
-        return to_cuda(torch.tensor(idx))
+        indexes = [self._stoi.get(gen) for gen in labels]
+        return to_cuda(torch.tensor([i if i is not None else 0 for i in indexes]))
 
 
 class Speaker(nn.Module):
@@ -107,21 +105,9 @@ class Speaker(nn.Module):
             nn.Dropout(0.20)
         )
 
-    def forward(self, s1, s2):
-        """ Embedding table lookup """
-        # Same speaker
-        if s1.speaker == s2.speaker:
-            idx = torch.tensor(1)
-
-        # Different speakers
-        elif s1.speaker != s2.speaker:
-            idx = torch.tensor(2)
-
-        # No speaker
-        else:
-            idx = torch.tensor(0)
-
-        return self.embeds(to_cuda(idx))
+    def forward(self, speaker_labels):
+        """ Embedding table lookup (see src.utils.speaker_label fnc) """
+        return self.embeds(to_cuda(torch.tensor(speaker_labels)))
 
 
 class CharCNN(nn.Module):
@@ -142,25 +128,25 @@ class CharCNN(nn.Module):
                                               kernel_size=n) for n in (3,4,5)])
         self.cnn_dropout = nn.Dropout(0.20)
 
-    def forward(self, *args):
+    def forward(self, sent):
         """ Compute filter-dimensional character-level features for each doc token """
-        embedded = self.embeddings(self.doc_to_batch(*args))
+        embedded = self.embeddings(self.sent_to_tensor(sent))
         convolved = torch.cat([F.relu(conv(embedded)) for conv in self.convs], dim=2)
         pooled = F.max_pool1d(convolved, convolved.shape[2])
-        output = self.cnn_dropout(pooled).squeeze()
+        output = self.cnn_dropout(pooled).squeeze(2)
         return output
 
-    def doc_to_batch(self, doc):
+    def sent_to_tensor(self, sent):
         """ Batch-ify a document class instance for CharCNN embeddings """
-        tokens = [self.token_to_idx(token) for token in doc.tokens]
-        batch = self.pad_and_stack(tokens)
+        tokens = [self.token_to_idx(t) for t in sent]
+        batch = self.char_pad_and_stack(tokens)
         return batch
 
     def token_to_idx(self, token):
         """ Convert a token to its character lookup ids """
         return to_cuda(torch.tensor([self.stoi(c) for c in token]))
 
-    def pad_and_stack(self, tokens):
+    def char_pad_and_stack(self, tokens):
         """ Pad and stack an uneven tensor of token lookup ids """
         skimmed = [t[:self.pad_size] for t in tokens]
 
@@ -180,7 +166,7 @@ class CharCNN(nn.Module):
 class DocumentEncoder(nn.Module):
     """ Document encoder for tokens
     """
-    def __init__(self, hidden_dim, char_filters, num_layers=2):
+    def __init__(self, hidden_dim, char_filters, n_layers=2):
         super().__init__()
 
         weights = VECTORS.weights()
@@ -197,43 +183,60 @@ class DocumentEncoder(nn.Module):
         # Character
         self.char_embeddings = CharCNN(char_filters)
 
-        # LSTM
-        input_dim = weights.shape[1] + turian_weights.shape[1] + char_filters
-        self.lstm = nn.LSTM(input_dim,
+        # Graf
+        self.lstm = nn.LSTM(weights.shape[1]+turian_weights.shape[1]+char_filters,
                             hidden_dim,
-                            num_layers=num_layers,
+                            num_layers=n_layers,
                             bidirectional=True,
                             batch_first=True)
 
         # Dropout
         self.emb_dropout, self.lstm_dropout = nn.Dropout(0.50), nn.Dropout(0.20)
 
-    def forward(self, document):
+    def forward(self, doc):
         """ Convert document words to ids, embed them, pass through LSTM. """
+
+        # Embed document
+        embeds = [self.embed(s) for s in doc.sents]
+
+        # Batch for LSTM
+        packed, reorder = pad_and_pack(embeds)
+
+        # Pass an LSTM over the embeds
+        output, _ = self.lstm(packed)
+
+        # Undo the packing/padding required for batching
+        unpacked = unpack_and_unpad(output, reorder)
+
+        # Apply dropout
+        states = [self.lstm_dropout(tensor) for tensor in unpacked]
+
+        return torch.cat(states, dim=0), torch.cat(embeds, dim=0)
+
+    def embed(self, sent):
+        """ Embed a sentence using GLoVE, Turian, and character embeddings """
+
         # Convert document tokens to look up ids
-        tensor = doc_to_tensor(document, VECTORS)
-        tensor = tensor.unsqueeze(0)
+        glove_tensor = lookup_tensor(sent, VECTORS)
 
-        # Embed the tokens, regularize
-        embeds = self.embeddings(tensor)
-        embeds = self.emb_dropout(embeds)
+        # Embed the tokens with Glove, apply dropout
+        glove_embeds = self.embeddings(glove_tensor)
+        glove_embeds = self.emb_dropout(glove_embeds)
 
-        # Convert document tokens to Turian look up IDs #TODO: align with GLoVE
-        tur_tensor = doc_to_tensor(document, TURIAN)
-        tur_tensor = tur_tensor.unsqueeze(0)
+        # Convert document tokens to Turian look up IDs
+        tur_tensor = lookup_tensor(sent, TURIAN)
 
-        # Embed again
+        # Embed again using Turian this time, dropout
         tur_embeds = self.turian(tur_tensor)
         tur_embeds = self.emb_dropout(tur_embeds)
 
-        char_embeds = self.char_embeddings(document).unsqueeze(0)
-        full_embeds = torch.cat((embeds, tur_embeds, char_embeds), dim=2)
+        # Character embeddings
+        char_embeds = self.char_embeddings(sent)
 
-        # Pass an LSTM over the embeds, regularize
-        states, _ = self.lstm(full_embeds)
-        states = self.lstm_dropout(states)
+        # Concatenate them all together
+        embeds = torch.cat((glove_embeds, tur_embeds, char_embeds), dim=1)
 
-        return states.squeeze(), full_embeds.squeeze()
+        return embeds
 
 
 class MentionScore(nn.Module):
@@ -246,49 +249,59 @@ class MentionScore(nn.Module):
         self.width = Distance(distance_dim)
         self.score = Score(gi_dim)
 
-    def forward(self, states, embeds, document, LAMBDA=0.40):
+    def forward(self, states, embeds, doc, K=250):
         """ Compute unary mention score for each span
-
         """
-        # Compute first part of attention over span states
+
+        # Compute first part of attention over span states (alpha_t)
         attns = self.attention(states)
 
-        spans = []
+        # Regroup attn values, embeds into span representations
+        span_attns, span_embeds = zip(*[(attns[s.i1:s.i2+1], embeds[s.i1:s.i2+1])
+                                        for s in doc.spans])
 
-        for span in document.spans: # could probably deprecate this
-            # Start index, end index of the span
-            i1, i2 = span[0], span[-1]
+        # Pad and stack span attention values, span embeddings for batching
+        padded_attns, _ = pad_and_stack(span_attns, value=-1e10)
+        padded_embeds, _ = pad_and_stack(span_embeds)
 
-            # Speaker
-            speaker = s_to_speaker(span, document.speakers)
+        # Weight attention values using softmax
+        attn_weights = F.softmax(padded_attns, dim=1)
 
-            # Embeddings, hidden states, raw attn scores for tokens
-            # Slicing slows performance. Unsure if this is batch-able.
-            span_embeds = embeds[i1:i2+1]
-            span_attn = attns[i1:i2+1]
+        # Compute self-attention over embeddings (x_hat)
+        attn_embeds = (padded_embeds * attn_weights).sum(dim=1)
 
-            # Compute the rest of the attention
-            attn = F.softmax(span_attn, dim=0)
-            attn = sum(attn * span_embeds)
+        # Compute span widths (i.e. lengths), embed them
+        widths = self.width(doc.widths)
 
-            # Lookup embedding for width of spans
-            size = self.width(len(span))
-
-            # Final span representation g_i
-            g_i = torch.cat([states[i1], states[i2], attn, size])
-            spans.append(Span(i1, i2, g_i, speaker))
+        # Cat it all together to get g_i, our span representation
+        start_end = torch.stack([torch.cat((states[s.i1], states[s.i2]))
+                                 for s in doc.spans])
+        g_i = torch.cat((start_end, attn_embeds, widths), dim=1)
 
         # Compute each span's unary mention score
-        mention_reprs = torch.stack([s.g for s in spans])
-        mention_scores = self.score(mention_reprs).squeeze()
+        mention_scores = self.score(g_i)
 
-        # Update the span object
+        # Update span object attributes
+        # (use detach so we don't get crazy gradients by splitting the tensors so often)
         spans = [
-            attr.evolve(span, si=si)
-            for span, si in zip(spans, mention_scores)
+            attr.evolve(span,
+                        si=si,
+                        g=g)
+            for idx, (span, si, g)
+            in enumerate(zip(doc.spans, mention_scores.detach(), g_i.detach()))
         ]
 
-        return spans
+        # Prune down to LAMBDA*len(doc) spans
+        spans = prune(spans, len(doc))
+
+        # Update antencedent set (yi) for each mention
+        spans = [
+            attr.evolve(span,
+                        yi=spans[max(0, idx-K):idx])
+            for idx, span in enumerate(spans)
+        ]
+
+        return spans, g_i, mention_scores
 
 
 class PairwiseScore(nn.Module):
@@ -303,51 +316,48 @@ class PairwiseScore(nn.Module):
 
         self.score = Score(gij_dim)
 
-    def forward(self, spans, genre, K=250):
+    def forward(self, spans, g_i, mention_scores):
         """ Compute pairwise score for spans and their up to K antecedents
         """
-        # Consider only top K antecedents
-        spans = [
-            attr.evolve(span, yi=spans[max(0, idx-K):idx])
-            for idx, span in enumerate(spans)
-        ]
 
-        # Get s_ij representations
-        pairs = torch.stack([
-            torch.cat([i.g, j.g, i.g*j.g,
-                       self.distance(i.i2-j.i1),
-                       self.genre(genre),
-                       self.speaker(i, j)])
-            for i in spans for j in i.yi
-        ])
+        # Get raw feature input for distance, genre, speaker
+        distances, genres, speakers = zip(*[(i.i2-j.i1, i.genre, speaker_label(i, j))
+                                             for i in spans
+                                             for j in i.yi])
+
+        # Embed them
+        phi = torch.cat((self.distance(distances),
+                         self.genre(genres),
+                         self.speaker(speakers)), dim=1)
+
+        # Get IDs for each mention, its antecedents
+        mention_ids, antecedent_ids = zip(*[(i.id, j.id)
+                                            for i in spans
+                                            for j in i.yi])
+
+        # Extract their span representations from the g_i matrix
+        i_g, j_g = g_i[[mention_ids]], g_i[[antecedent_ids]]
+
+        # Create s_ij representations
+        pairs = torch.cat((i_g, j_g, i_g*j_g, phi), dim=1)
 
         # Score pairs of spans for coreference link
-        pairwise_scores = self.score(pairs).squeeze()
+        pairwise_scores = self.score(pairs)
 
-        # Indices for pairs indexing back into pairwise_scores
-        sa_idx = pairwise_indexes(spans)
+        # Extract mention score for each mention and its antecedents
+        si, sj = mention_scores[[mention_ids]], mention_scores[[antecedent_ids]]
 
-        spans_ij = []
-        for span, (i1, i2) in zip(spans, pairwise(sa_idx)):
+        # Compute pairwise scores for coreference links between each mention and
+        # its antecedents
+        sij_scores = (si + sj + pairwise_scores).squeeze()
 
-            # sij = score between span i, span j
-            sij = [
-                (span.si + yi.si + pair)
-                for yi, pair in zip(span.yi, pairwise_scores[i1:i2])
-            ]
-
-            # Dummy variable for if the span is not a mention
-            epsilon = to_var(torch.tensor(0.))
-            sij = torch.stack(sij + [epsilon])
-
-            # Update span object
-            spans_ij.append(attr.evolve(span, sij=sij))
-
-        # Update spans with set of possible antecedents' indices
+        # Update spans with set of possible antecedents' indices, scores
         spans = [
-            attr.evolve(span, yi_idx=[((y.i1, y.i2), (span.i1, span.i2))
-                                        for y in span.yi])
-            for span in spans_ij
+            attr.evolve(span,
+                        sij=torch.cat((sij_scores[i1:i2], to_var(torch.tensor([0.]))), dim=0),
+                        yi_idx=[((y.i1, y.i2), (span.i1, span.i2)) for y in span.yi]
+                       )
+            for span, (i1, i2) in zip(spans, pairwise_indexes(spans))
         ]
 
         return spans
@@ -375,28 +385,25 @@ class CorefScore(nn.Module):
         gij_dim = gi_dim*3 + distance_dim + genre_dim + speaker_dim
 
         # Initialize modules
-        self.encode_doc = DocumentEncoder(hidden_dim, char_filters)
+        self.encoder = DocumentEncoder(hidden_dim, char_filters)
         self.score_spans = MentionScore(gi_dim, attn_dim, distance_dim)
         self.score_pairs = PairwiseScore(gij_dim, distance_dim, genre_dim, speaker_dim)
 
-    def forward(self, document):
+    def forward(self, doc):
         """ Enocde document
             Predict unary mention scores, prune them
             Predict pairwise coreference scores
         """
         # Encode the document, keep the LSTM hidden states and embedded tokens
-        states, embeds = self.encode_doc(document)
+        states, embeds = self.encoder(doc)
 
-        # Get mention scores for each span
-        spans = self.score_spans(states, embeds, document)
-
-        # Prune the spans by decreasing mention score
-        spans = prune(spans, len(document))
+        # Get mention scores for each span, prune
+        spans, g_i, mention_scores = self.score_spans(states, embeds, doc)
 
         # Get pairwise scores for each span combo
-        spans = self.score_pairs(spans, document.genre)
+        pairs = self.score_pairs(spans, g_i, mention_scores)
 
-        return spans
+        return pairs
 
 
 class Trainer:
@@ -404,6 +411,7 @@ class Trainer:
     """
     def __init__(self, model, train_corpus, val_corpus, test_corpus,
                     lr=1e-3, steps=100):
+
         self.__dict__.update(locals())
         self.train_corpus = list(self.train_corpus)
         self.model = to_cuda(model)
@@ -433,17 +441,18 @@ class Trainer:
         self.model.train()
 
         # Randomly sample documents from the train corpus
-        docs = random.sample(self.train_corpus, self.steps)
+        batch = random.sample(self.train_corpus, self.steps)
 
         epoch_loss, epoch_mentions, epoch_corefs, epoch_identified = [], [], [], []
-        for doc in tqdm(docs):
+
+        for document in tqdm(batch):
 
             # Randomly truncate document to up to 50 sentences
-            document = doc.truncate()
+            doc = document.truncate()
 
             # Compute loss, number gold links found, total gold links
             loss, mentions_found, total_mentions, \
-                corefs_found, total_corefs, corefs_chosen = self.train_doc(document)
+                corefs_found, total_corefs, corefs_chosen = self.train_doc(doc)
 
             # Track stats by document for debugging
             print(document, '| Loss: %f | Mentions: %d/%d | Coref recall: %d/%d | Corefs precision: %d/%d' \
@@ -462,7 +471,7 @@ class Trainer:
                 % (epoch, np.mean(epoch_loss), np.mean(epoch_mentions),
                     np.mean(epoch_corefs), np.mean(epoch_identified)))
 
-    def train_doc(self, document, CLIP=5):
+    def train_doc(self, document):
         """ Compute loss for a forward pass over a document """
 
         # Extract gold coreference links
@@ -493,10 +502,10 @@ class Trainer:
                 found_corefs = [1 for score in span.sij if score > 0.]
                 corefs_chosen.append(len(found_corefs))
 
-            # Conditional probability distribution over all possible previous spans
+            # Conditional probability distribution over antecedents
             probs = F.softmax(span.sij, dim=0)
 
-            # Marginal log-likelihood of correct antecedents implied by gold clustering
+            # Log-likelihood of correct antecedents implied by gold clustering
             mass = torch.log(sum([probs[i] for i in gold_idx]))
 
             # Save the loss for this span
@@ -505,9 +514,6 @@ class Trainer:
         # Negative marginal log-likelihood for minimizing, backpropagate
         loss = sum(losses) * -1
         loss.backward()
-
-        # Clip parameters
-#         nn.utils.clip_grad_norm_(self.model.parameters(), CLIP)
 
         # Step the optimizer
         self.optimizer.step()
@@ -543,41 +549,54 @@ class Trainer:
 
         return results
 
-    def predict(self, document):
+    def predict(self, doc):
         """ Predict coreference clusters in a document """
 
+        # Set to eval mode
+        self.model.eval()
+
+        # Initialize graph (mentions are nodes and edges indicate coref linkage)
         graph = nx.Graph()
-        spans = self.model(document)
+
+        # Pass the document through the model
+        spans = self.model(doc)
+
+        # Cluster found coreference links
         for i, span in enumerate(spans):
 
+            # Loss implicitly pushes coref links above 0, rest below 0
             found_corefs = [idx
                             for idx, score in enumerate(span.sij)
                             if score > 0.]
 
+            # If we have any
             if any(found_corefs):
 
+                # Add edges between all spans in the cluster
                 for coref_idx in found_corefs:
                     link = spans[coref_idx]
                     graph.add_edge((span.i1, span.i2), (link.i1, link.i2))
 
+        # Extract clusters as nodes that share an edge
         clusters = list(nx.connected_components(graph))
 
-        # Cluster found coreferences
-        doc_tags = [[] for _ in range(len(document))]
+        # Initialize token tags
+        token_tags = [[] for _ in range(len(document))]
 
+        # Add in cluster ids for each cluster of corefs in place of token tag
         for idx, cluster in enumerate(clusters):
             for i1, i2 in cluster:
 
                 if i1 == i2:
-                    doc_tags[i1].append(f'({idx})')
+                    token_tags[i1].append(f'({idx})')
 
                 else:
-                    doc_tags[i1].append(f'({idx}')
-                    doc_tags[i2].append(f'{idx})')
+                    token_tags[i1].append(f'({idx}')
+                    token_tags[i2].append(f'{idx})')
 
-        document.tags = ['|'.join(t) if t else '-' for t in doc_tags]
+        doc.tags = ['|'.join(t) if t else '-' for t in token_tags]
 
-        return document
+        return doc
 
     def to_conll(self, val_corpus, eval_script):
         """ Write to out_file the predictions, return CoNLL metrics results """
@@ -632,5 +651,6 @@ class Trainer:
 
 # Initialize model, train
 model = CorefScore(embeds_dim=400, hidden_dim=200)
-trainer = Trainer(model, train_corpus, val_corpus, test_corpus)
-trainer.train(100)
+trainer = Trainer(model, train_corpus, val_corpus, test_corpus,
+                    steps=100) # One full pass over train corpus
+trainer.train(280)

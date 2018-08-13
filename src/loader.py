@@ -5,9 +5,11 @@ from torchtext.vocab import Vectors
 from torch.autograd import Variable
 
 import os, io, re, attr, random
-from copy import deepcopy as c
 from fnmatch import fnmatch
+from copy import deepcopy as c
+from boltons.iterutils import pairwise
 from cached_property import cached_property
+
 from utils import *
 
 NORMALIZE_DICT = {"/.": ".", "/?": "?",
@@ -34,7 +36,8 @@ class Corpus:
 
         for document in self.docs:
             vocab.update(document.tokens)
-            char_vocab.update([char for word in document.tokens
+            char_vocab.update([char
+                               for word in document.tokens
                                for char in word])
 
         return vocab, char_vocab
@@ -63,19 +66,52 @@ class Document:
         return len(self.tokens)
 
     @cached_property
+    def sents(self):
+        """ Regroup raw_text into sentences """
+
+        # Get sentence boundaries
+        sent_idx = [idx+1
+                    for idx, token in enumerate(self.tokens)
+                    if token in ['.', '?', '!']]
+
+        # Regroup (returns list of lists)
+        return [self.tokens[i1:i2] for i1, i2 in pairwise([0] + sent_idx)]
+
+    @cached_property
     def spans(self):
-        return compute_idx_spans(self.tokens)
+        """ Create Span object for each span """
+        return [Span(i1=i[0], i2=i[-1], id=idx,
+                    speaker=self.speaker(i), genre=self.genre)
+                for idx, i in enumerate(compute_idx_spans(self.sents))]
+
+    @cached_property
+    def widths(self):
+        """ Distances between start, end indexes for each span """
+        return [len(s) for s in self.spans]
 
     def truncate(self, MAX=25):
         """ Randomly truncate the document to up to MAX sentences """
+<<<<<<< HEAD
         sentences = [idx for idx, token in enumerate(self.tokens) if token in ['.', '?', '!']]
         if len(sentences) > MAX:
             i = random.sample(range(MAX, len(sentences)), 1)[0]
             tokens = self.tokens[sentences[i-MAX]:sentences[i]]
+=======
+
+        if len(self.sents) > MAX:
+            i = random.sample(range(MAX, len(self.sents)), 1)[0]
+            tokens = flatten(self.sents[i-MAX:i])
+>>>>>>> batch
             return self.__class__(c(self.raw_text), tokens,
-                                    c(self.corefs), c(self.speakers),
-                                    c(self.genre), c(self.filename))
+                                  c(self.corefs), c(self.speakers),
+                                  c(self.genre), c(self.filename))
         return self
+
+    def speaker(self, i):
+        """ Compute speaker of a span """
+        if self.speakers[i[0]] == self.speakers[i[-1]]:
+            return self.speakers[i[0]]
+        return None
 
 
 @attr.s(frozen=True, repr=False)
@@ -85,14 +121,20 @@ class Span:
     i1 = attr.ib()
     i2 = attr.ib()
 
-    # Span embedding tensor
-    g = attr.ib()
+    # Id within total spans (for indexing into a batch computation)
+    id = attr.ib()
 
     # Speaker
-    speaker = attr.ib(default=None)
+    speaker = attr.ib()
+
+    # Genre
+    genre = attr.ib()
 
     # Unary mention score, as tensor
     si = attr.ib(default=None)
+
+    # Span representation
+    g = attr.ib(default=None)
 
     # List of candidate antecedent spans
     yi = attr.ib(default=None)
@@ -103,8 +145,11 @@ class Span:
     # Corresponding span ids to each yi
     yi_idx = attr.ib(default=None)
 
+    def __len__(self):
+        return self.i2-self.i1+1
+
     def __repr__(self):
-        return 'Span representing %d tokens' % (self.i2-self.i1+1)
+        return 'Span representing %d tokens' % (self.__len__())
 
 
 class LazyVectors:
@@ -284,10 +329,10 @@ def clean_token(token):
         cleaned_token = ","
     return cleaned_token
 
-def doc_to_tensor(document, vectorizer):
-    """ Convert a sentence to a tensor """
-    return to_cuda(torch.tensor([vectorizer.stoi(token)
-                                 for token in document.tokens]))
+def lookup_tensor(tokens, vectorizer):
+    """ Convert a sentence to an embedding lookup tensor """
+    return to_cuda(torch.tensor([vectorizer.stoi(t) for t in tokens]))
+
 
 # Load in corpus, lazily load in word vectors.
 train_corpus = read_corpus('../data/train/')
