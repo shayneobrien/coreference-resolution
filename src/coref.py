@@ -284,7 +284,7 @@ class MentionScore(nn.Module):
         mention_scores = self.score(g_i)
 
         # Update span object attributes
-        # (use detach so we don't get crazy gradients by splitting the tensors so often)
+        # (use detach so we don't get crazy gradients by splitting the tensors)
         spans = [
             attr.evolve(span, si=si)
             for idx, (span, si)
@@ -329,6 +329,7 @@ class PairwiseScore(nn.Module):
                          self.genre(genres),
                          self.speaker(speakers)), dim=1)
 
+        # TODO: combine this with distances, genres, speakers passover
         # Get IDs for each mention, its antecedents
         mention_ids, antecedent_ids = zip(*[(i.id, j.id)
                                             for i in spans
@@ -351,10 +352,10 @@ class PairwiseScore(nn.Module):
         sij_scores = (si + sj + pairwise_scores).squeeze()
 
         # Update spans with set of possible antecedents' indices, scores
-        #TODO: can we avoid splitting tensors here?
+        #TODO: can we avoid splitting tensors here? (pad_and_stack)
         spans = [
             attr.evolve(span,
-                        sij=torch.cat((sij_scores[i1:i2], to_var(torch.tensor([0.]))), dim=0).detach(),
+                        sij=torch.cat((sij_scores[i1:i2], to_var(torch.tensor([0.]))), dim=0),
                         yi_idx=[((y.i1, y.i2), (span.i1, span.i2)) for y in span.yi]
                        )
             for span, (i1, i2) in zip(spans, pairwise_indexes(spans))
