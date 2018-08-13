@@ -112,7 +112,7 @@ def pairwise_indexes(spans):
     """ Get indices for indexing into pairwise_scores """
     indexes = [0] + [len(s.yi) for s in spans]
     indexes = [sum(indexes[:idx+1]) for idx, _ in enumerate(indexes)]
-    return indexes
+    return pairwise(indexes)
 
 def extract_gold_corefs(document):
     """ Parse coreference dictionary of a document to get coref links """
@@ -151,9 +151,17 @@ def fix_coref_spans(doc):
         doc.corefs[idx]['span'] = tuple([coref['start'], coref['end']])
     return doc
 
-def compute_idx_spans(tokens, L=10):
-    """ Compute all possible token spans """
-    return flatten([windowed(range(len(tokens)), length) for length in range(1, L)])
+def compute_idx_spans(sentences, L=10):
+    """ Compute span indexes for all possible spans up to length L in each
+    sentence """
+    idx_spans, shift = [], 0
+    for sent in sentences:
+        sent_spans = flatten([windowed(range(shift, len(sent)+shift), length)
+                              for length in range(1, L)])
+        idx_spans.extend(sent_spans)
+        shift += len(sent)
+
+    return idx_spans
 
 def s_to_speaker(span, speakers):
     """ Compute speaker of a span """
@@ -162,6 +170,7 @@ def s_to_speaker(span, speakers):
     return None
 
 def speaker_label(s1, s2):
+    """ Compute if two spans have the same speaker or not """
     # Same speaker
     if s1.speaker == s2.speaker:
         idx = torch.tensor(1)
@@ -177,6 +186,7 @@ def speaker_label(s1, s2):
     return to_cuda(idx)
 
 def safe_divide(x, y):
+    """ Make sure we don't divide by 0 """
     if y != 0:
         return x / y
     return 1

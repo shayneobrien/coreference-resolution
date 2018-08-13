@@ -1,6 +1,5 @@
 # TODO:
 # Early stopping
-# No more slicing (is this possible to do..?)
 
 print('Initializing...')
 import torch
@@ -17,8 +16,8 @@ from random import sample
 from datetime import datetime
 from subprocess import Popen, PIPE
 from boltons.iterutils import pairwise
-from loader import *
-from utils import *
+from src.loader import *
+from src.utils import *
 
 
 class Score(nn.Module):
@@ -130,15 +129,15 @@ class CharCNN(nn.Module):
 
     def forward(self, *args):
         """ Compute filter-dimensional character-level features for each doc token """
-        embedded = self.embeddings(self.doc_to_batch(*args))
+        embedded = self.embeddings(self.sent_to_tensor(*args))
         convolved = torch.cat([F.relu(conv(embedded)) for conv in self.convs], dim=2)
         pooled = F.max_pool1d(convolved, convolved.shape[2])
         output = self.cnn_dropout(pooled).squeeze()
         return output
 
-    def doc_to_batch(self, doc):
+    def sent_to_tensor(self, sent):
         """ Batch-ify a document class instance for CharCNN embeddings """
-        tokens = [self.token_to_idx(token) for token in doc.tokens]
+        tokens = [self.token_to_idx(t) for t in sent]
         batch = self.char_pad_and_stack(tokens)
         return batch
 
@@ -193,44 +192,45 @@ class DocumentEncoder(nn.Module):
         # Dropout
         self.emb_dropout, self.lstm_dropout = nn.Dropout(0.50), nn.Dropout(0.20)
 
-    def forward(self, documents):
+    def forward(self, document):
         """ Convert document words to ids, embed them, pass through LSTM. """
 
         # Embed document
-        embedded_docs = [self.embed_doc(doc) for doc in documents]
+        embeds = [self.embed(s) for s in document.sents]
 
         # Batch for LSTM
-        packed, reorder = pad_and_pack(embedded_docs)
+        packed, reorder = pad_and_pack(embeds)
 
         # Pass an LSTM over the embeds
-        states, _ = self.lstm(packed)
+        output, _ = self.lstm(packed)
 
         # Undo the packing/padding required for batching
-        unpacked = unpack_and_unpad(states, reorder)
+        unpacked = unpack_and_unpad(output, reorder)
 
         # Apply dropout
-        unpacked = [self.lstm_dropout(tensor) for tensor in unpacked]
+        states = [self.lstm_dropout(tensor) for tensor in unpacked]
 
-        return unpacked, embedded_docs
+        return torch.cat(states, dim=0), torch.cat(embeds, dim=0)
 
-    def embed_doc(self, document):
-        """ Embed a document using GLoVE, Turian, and character embeddings """
+    def embed(self, sent):
+        """ Embed a sentence using GLoVE, Turian, and character embeddings """
+
         # Convert document tokens to look up ids
-        tensor = doc_to_tensor(document, VECTORS)
+        tensor = lookup_tensor(sent, VECTORS)
 
         # Embed the tokens with Glove, apply dropout
         embeds = self.embeddings(tensor)
         embeds = self.emb_dropout(embeds)
 
         # Convert document tokens to Turian look up IDs
-        tur_tensor = doc_to_tensor(document, TURIAN)
+        tur_tensor = lookup_tensor(sent, TURIAN)
 
         # Embed again using Turian this time, dropout
         tur_embeds = self.turian(tur_tensor)
         tur_embeds = self.emb_dropout(tur_embeds)
 
         # Character embeddings
-        char_embeds = self.char_embeddings(document)
+        char_embeds = self.char_embeddings(sent)
 
         # Concatenate them all together
         full_embeds = torch.cat((embeds, tur_embeds, char_embeds), dim=1)
@@ -248,69 +248,61 @@ class MentionScore(nn.Module):
         self.width = Distance(distance_dim)
         self.score = Score(gi_dim)
 
-    def forward(self, unpacked, embedded_docs, documents):
+    def forward(self, states, embeds, document, K=250):
         """ Compute unary mention score for each span
         """
-        # Cat together for faster computation
-        sizes = [i.shape[0] for i in unpacked]
-        states = torch.cat(unpacked, dim=0)
-        embeds = torch.cat(embedded_docs)
 
-        # Compute widths
-        span_lens = [len(s) for doc in documents for s in doc.spans]
-        widths = self.width(span_lens)
-
-        # Compute first part of attention over span states
+        # Compute first part of attention over span states (alpha_t)
         attns = self.attention(states)
-        spans, shift = [], 0
 
-        for idx, doc in enumerate(documents):
+        # Regroup attn values, embeds into span representations
+        span_attns, span_embeds = zip(*[(attns[s.i1:s.i2+1], embeds[s.i1:s.i2+1])
+                                        for s in document.spans])
 
-            for s_idx, span in enumerate(doc.spans):
+        # Pad and stack span attention values, span embeddings for batching
+        padded_attns, _ = pad_and_stack(span_attns, value=-1e10)
+        padded_embeds, _ = pad_and_stack(span_embeds)
 
-                # Start index, end index of the span
-                i1, i2 = span[0]+shift, span[-1]+shift
+        # Weight attention values using softmax
+        attn_weights = F.softmax(padded_attns, dim=1)
 
-                # Speaker
-                speaker = s_to_speaker(span, doc.speakers)
+        # Compute self-attention over embeddings (x_hat)
+        attn_embeds = (padded_embeds * attn_weights).sum(dim=1)
 
-                # Embeddings, hidden states, raw attn scores for tokens
-                # Slicing slows performance. Unsure if this is batch-able.
-                span_embeds = embeds[i1:i2+1]
-                span_attn = attns[i1:i2+1]
+        # Compute span widths (i.e. lengths), embed them
+        widths = self.width(document.widths)
 
-                # Compute the rest of the attention
-                attn = F.softmax(span_attn, dim=0)
-                attn = sum(attn * span_embeds)
-
-                # Final span representation g_i
-                g_i = torch.cat([states[i1], states[i2], attn, widths[shift+s_idx]])
-                spans.append(Span(i1, i2, g_i, speaker, doc.genre))
-
-            # Increment shift
-            shift += sizes[idx]
+        # Cat it all together to get g_i, our span representation
+        start_end = torch.stack([torch.cat((states[s.i1], states[s.i2]))
+                                 for s in document.spans])
+        g_i = torch.cat((start_end, attn_embeds, widths), dim=1)
 
         # Compute each span's unary mention score
-        mention_reprs = torch.stack([s.g for s in spans])
-        mention_scores = self.score(mention_reprs).squeeze()
+        mention_scores = self.score(g_i)
 
-        # Update the span object
+        # Update span object attributes
+        # (use detach so we don't get crazy gradients by splitting the tensors so often)
         spans = [
-            attr.evolve(span, si=si)
-            for span, si in zip(spans, mention_scores)
+            attr.evolve(span,
+                        si=si,
+                        g=g)
+            for idx, (span, si, g) in enumerate(zip(document.spans, mention_scores.detach(), g_i.detach()))
         ]
 
-        # Regroup spans into their respective documents
-        lens = [0] + [len(doc.spans) for doc in documents]
-        indexes = [sum(lens[:i+1]) for i, _ in enumerate(lens)]
-        spans = [spans[i1:i2] for i1, i2 in pairwise(indexes)]
+        # Prune down to LAMBDA*len(doc) spans
+        spans = prune(spans, len(document))
 
-        # PRUNE
-        spans = [prune(doc_spans, len(doc))
-                 for doc_spans, doc
-                 in zip(spans, documents)]
+        # Update antencedents (yi), gradient enabled mention score (si)
+        # and span representation (g)
+        spans = [
+            attr.evolve(span,
+                        si=mention_scores[span.id],
+                        g=g_i[span.id],
+                        yi=spans[max(0, idx-K):idx])
+            for idx, span in enumerate(spans)
+        ]
 
-        return spans
+        return spans, g_i, mention_scores
 
 
 class PairwiseScore(nn.Module):
@@ -325,71 +317,51 @@ class PairwiseScore(nn.Module):
 
         self.score = Score(gij_dim)
 
-    def forward(self, doc_spans, K=250):
+    def forward(self, spans, g_i, mention_scores):
         """ Compute pairwise score for spans and their up to K antecedents
         """
 
-        all_spans = []
+        # Get raw feature input for distance, genre, speaker
+        distances, genres, speakers = zip(*[(i.i2-j.i1, i.genre, speaker_label(i, j))
+                                             for i in spans
+                                             for j in i.yi])
 
-        for span_group in doc_spans:
+        # Embed them
+        phi = torch.cat((self.distance(distances),
+                         self.genre(genres),
+                         self.speaker(speakers)), dim=1)
 
-            # Consider only top K antecedents
-            spans = [
-                attr.evolve(span, yi=span_group[max(0, idx-K):idx])
-                for idx, span in enumerate(span_group)
-            ]
+        # Get IDs for each mention, its antecedents
+        mention_ids, antecedent_ids = zip(*[(i.id, j.id)
+                                            for i in spans
+                                            for j in i.yi])
 
-            # Batch lookup feature dims
-            distances, genres, speakers = zip(*[(i.i2-j.i1, i.genre, speaker_label(i, j))
-                                                for i in spans
-                                                for j in i.yi])
+        # Extract their span representations from the g_i matrix
+        i_g, j_g = g_i[[mention_ids]], g_i[[antecedent_ids]]
 
-            distances_embs = self.distance(distances)
-            genres_embs = self.genre(genres)
-            speakers_embs = self.speaker(speakers)
+        # Create s_ij representations
+        pairs = torch.cat((i_g, j_g, i_g*j_g, phi), dim=1)
 
-            # Get s_ij representations
-            pairs = torch.stack([
-                torch.cat([i.g, j.g, i.g*j.g,
-                          distances_embs[idx],
-                          genres_embs[idx],
-                          speakers_embs[idx]
-                          ])
-                for idx, i in enumerate(spans) for j in i.yi
-            ])
+        # Score pairs of spans for coreference link
+        pairwise_scores = self.score(pairs)
 
-            # Score pairs of spans for coreference link
-            pairwise_scores = self.score(pairs).squeeze()
+        # Extract mention score for each mention and its antecedents
+        si, sj = mention_scores[[mention_ids]], mention_scores[[antecedent_ids]]
 
-            # Indices for pairs indexing back into pairwise_scores
-            sa_idx = pairwise_indexes(spans)
+        # Compute pairwise scores for coreference links between each mention and
+        # its antecedents
+        sij_scores = (si + sj + pairwise_scores).squeeze()
 
-            spans_ij = []
-            for span, (i1, i2) in zip(spans, pairwise(sa_idx)):
+        # Update spans with set of possible antecedents' indices, scores
+        spans = [
+            attr.evolve(span,
+                        sij=torch.cat((sij_scores[i1:i2], to_var(torch.tensor([0.]))), dim=0),
+                        yi_idx=[((y.i1, y.i2), (span.i1, span.i2)) for y in span.yi]
+                       )
+            for span, (i1, i2) in zip(spans, pairwise_indexes(spans))
+        ]
 
-                # sij = score between span i, span j
-                sij = [
-                    (span.si + yi.si + pair)
-                    for yi, pair in zip(span.yi, pairwise_scores[i1:i2])
-                ]
-
-                # Dummy variable for if the span is not a mention
-                epsilon = to_var(torch.tensor(0.))
-                sij = torch.stack(sij + [epsilon])
-
-                # Update span object
-                spans_ij.append(attr.evolve(span, sij=sij))
-
-            # Update spans with set of possible antecedents' indices
-            spans = [
-                attr.evolve(span, yi_idx=[((y.i1, y.i2), (span.i1, span.i2))
-                                            for y in span.yi])
-                for span in spans_ij
-            ]
-
-            all_spans.append(spans)
-
-        return all_spans
+        return spans
 
 
 class CorefScore(nn.Module):
@@ -418,19 +390,19 @@ class CorefScore(nn.Module):
         self.score_spans = MentionScore(gi_dim, attn_dim, distance_dim)
         self.score_pairs = PairwiseScore(gij_dim, distance_dim, genre_dim, speaker_dim)
 
-    def forward(self, documents):
+    def forward(self, doc):
         """ Enocde document
             Predict unary mention scores, prune them
             Predict pairwise coreference scores
         """
         # Encode the document, keep the LSTM hidden states and embedded tokens
-        unpacked, embedded_docs = self.encoder(documents)
+        states, embeds = self.encoder(doc)
 
         # Get mention scores for each span, prune
-        spans = self.score_spans(unpacked, embedded_docs, documents)
+        spans, g_i, mention_scores = self.score_spans(states, embeds, doc)
 
         # Get pairwise scores for each span combo
-        pairs = self.score_pairs(spans)
+        pairs = self.score_pairs(spans, g_i, mention_scores)
 
         return pairs
 
@@ -439,7 +411,7 @@ class Trainer:
     """ Class dedicated to training and evaluating the model
     """
     def __init__(self, model, train_corpus, val_corpus, test_corpus,
-                    lr=1e-3, batch_size=10, steps=100):
+                    lr=1e-3, steps=100):
 
         self.__dict__.update(locals())
         self.train_corpus = list(self.train_corpus)
@@ -449,7 +421,7 @@ class Trainer:
                                             if p.requires_grad],
                                     lr=lr)
         self.scheduler = optim.lr_scheduler.StepLR(self.optimizer,
-                                                    step_size=int(100/self.batch_size),
+                                                    step_size=100,
                                                     gamma=0.001)
 
     def train(self, num_epochs, *args, **kwargs):
@@ -466,31 +438,27 @@ class Trainer:
 
     def train_epoch(self, epoch):
         """ Run a training epoch over 'steps' documents """
-        # Init metrics
-        epoch_loss, epoch_mentions, epoch_corefs, epoch_identified = [], [], [], []
-
         # Set model to train (enables dropout)
         self.model.train()
 
-        for _ in tqdm(range(self.steps)):
+        # Randomly sample documents from the train corpus
+        batch = random.sample(self.train_corpus, self.steps)
 
-            # Randomly sample documents from the train corpus
-            docs = random.sample(self.train_corpus, self.batch_size)
+        epoch_loss, epoch_mentions, epoch_corefs, epoch_identified = [], [], [], []
 
-            # Truncate if longer then maxlen
-            docs = [doc.truncate() for doc in docs]
+        for document in tqdm(batch):
 
-            # Make predictions on batch
-            preds = self.model(docs)
+            # Randomly truncate document to up to 50 sentences
+            doc = document.truncate()
 
             # Compute loss, number gold links found, total gold links
             loss, mentions_found, total_mentions, \
-                corefs_found, total_corefs, corefs_chosen = self.batch_loss(docs, preds)
+                corefs_found, total_corefs, corefs_chosen = self.train_doc(doc)
 
             # Track stats by document for debugging
-            print('Batch loss: %f | Mentions found: %d/%d | Coreferences recall: %d/%d | Corefs precision: %d/%d' \
-                  % (loss, mentions_found, total_mentions,
-                     corefs_found, total_corefs, corefs_chosen, total_corefs))
+            print(document, '| Loss: %f | Mentions: %d/%d | Coref recall: %d/%d | Corefs precision: %d/%d' \
+                % (loss, mentions_found, total_mentions,
+                    corefs_found, total_corefs, corefs_chosen, total_corefs))
 
             epoch_loss.append(loss)
             epoch_mentions.append(safe_divide(mentions_found, total_mentions))
@@ -501,49 +469,48 @@ class Trainer:
             self.scheduler.step()
 
         print('Epoch: %d | Loss: %f | Mention recall: %f | Coref recall: %f | Coref precision: %f' \
-              % (epoch, np.mean(epoch_loss), np.mean(epoch_mentions),
-                np.mean(epoch_corefs), np.mean(epoch_identified)))
+                % (epoch, np.mean(epoch_loss), np.mean(epoch_mentions),
+                    np.mean(epoch_corefs), np.mean(epoch_identified)))
 
-    def batch_loss(self, documents, preds):
+    def train_doc(self, document, CLIP=5):
         """ Compute loss for a forward pass over a document """
+
+        # Extract gold coreference links
+        gold_corefs, total_corefs, \
+            gold_mentions, total_mentions = extract_gold_corefs(document)
 
         # Zero out optimizer gradients
         self.optimizer.zero_grad()
 
         losses, mentions_found, corefs_found, corefs_chosen = [], [], [], []
-        for doc, pred in zip(documents, preds):
+        for span in self.model(document):
 
-            # Extract gold coreference links
-            gold_corefs, total_corefs, gold_mentions, total_mentions = extract_gold_corefs(doc)
+            # Log number of mentions found
+            if (span.i1, span.i2) in gold_mentions:
+                mentions_found.append(1)
 
-            for span in pred:
+            # Check which of these tuples are in the gold set, if any
+            gold_idx = [
+                idx for idx, link in enumerate(span.yi_idx)
+                if link in gold_corefs
+            ]
 
-                # Log number of mentions found
-                if (span.i1, span.i2) in gold_mentions:
-                    mentions_found.append(1)
+            # If gold_pred_idx is empty, set gold to dummy
+            if not gold_idx:
+                gold_idx = [len(span.sij)-1]
+            else:
+                corefs_found.append(len(gold_idx))
+                found_corefs = [1 for score in span.sij if score > 0.]
+                corefs_chosen.append(len(found_corefs))
 
-                # Check which of these tuples are in the gold set, if any
-                gold_idx = [
-                    idx for idx, link in enumerate(span.yi_idx)
-                    if link in gold_corefs
-                ]
+            # Conditional probability distribution over all possible previous spans
+            probs = F.softmax(span.sij, dim=0)
 
-                # If gold_pred_idx is empty, set gold to dummy
-                if not gold_idx:
-                    gold_idx = [len(span.sij)-1]
-                else:
-                    corefs_found.append(len(gold_idx))
-                    found_corefs = [1 for score in span.sij if score > 0.]
-                    corefs_chosen.append(len(found_corefs))
+            # Marginal log-likelihood of correct antecedents implied by gold clustering
+            mass = torch.log(sum([probs[i] for i in gold_idx]))
 
-                # Conditional probability distribution over all possible previous spans
-                probs = F.softmax(span.sij, dim=0)
-
-                # Marginal log-likelihood of correct antecedents implied by gold clustering
-                mass = torch.log(sum([probs[i] for i in gold_idx]))
-
-                # Save the loss for this span
-                losses.append(mass)
+            # Save the loss for this span
+            losses.append(mass)
 
         # Negative marginal log-likelihood for minimizing, backpropagate
         loss = sum(losses) * -1
@@ -557,7 +524,8 @@ class Trainer:
         corefs_found = sum(corefs_found)
         corefs_chosen = sum(corefs_chosen)
 
-        return loss.item(), mentions_found, total_mentions, corefs_found, total_corefs, corefs_chosen
+        return (loss.item(), mentions_found, total_mentions,
+                corefs_found, total_corefs, corefs_chosen)
 
     def evaluate(self, val_corpus, eval_script='../src/eval/scorer.pl'):
         """ Evaluate a corpus of CoNLL-2012 gold files """
@@ -628,12 +596,12 @@ class Trainer:
 
         # Combine all gold files into a single file (Perl script requires this)
         golds_file_content = flatten([doc.raw_text for doc in val_corpus])
-        with io.open(preds_file, 'w', encoding='utf-8', errors='strict') as f:
+        with io.open(golds_file, 'w', encoding='utf-8', errors='strict') as f:
             for line in golds_file_content:
                 f.write(line)
 
         # Dump predictions
-        with io.open(filename, 'w', encoding='utf-8', errors='strict') as f:
+        with io.open(preds_file, 'w', encoding='utf-8', errors='strict') as f:
 
             current_idx = 0
             for doc in val_corpus:

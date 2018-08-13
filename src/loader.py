@@ -5,9 +5,11 @@ from torchtext.vocab import Vectors
 from torch.autograd import Variable
 
 import os, io, re, attr, random
-from copy import deepcopy as c
 from fnmatch import fnmatch
+from copy import deepcopy as c
+from boltons.iterutils import pairwise
 from cached_property import cached_property
+
 from utils import *
 
 NORMALIZE_DICT = {"/.": ".", "/?": "?",
@@ -34,7 +36,8 @@ class Corpus:
 
         for document in self.docs:
             vocab.update(document.tokens)
-            char_vocab.update([char for word in document.tokens
+            char_vocab.update([char
+                               for word in document.tokens
                                for char in word])
 
         return vocab, char_vocab
@@ -63,24 +66,35 @@ class Document:
         return len(self.tokens)
 
     @cached_property
+    def sents(self):
+        """ Regroup raw_text into sentences """
+
+        # Get sentence boundaries
+        sent_idx = [idx+1
+                    for idx, token in enumerate(self.tokens)
+                    if token in ['.', '?', '!']]
+
+        # Regroup (returns list of lists)
+        return [self.tokens[i1:i2] for i1, i2 in pairwise([0] + sent_idx)]
+
+    @cached_property
     def spans(self):
+        """ Create Span object for each span """
         return [Span(i1=i[0], i2=i[-1], id=idx,
                     speaker=self.speaker(i), genre=self.genre)
-                for idx, i in enumerate(compute_idx_spans(self.tokens))]
+                for idx, i in enumerate(compute_idx_spans(self.sents))]
 
     @cached_property
     def widths(self):
+        """ Distances between start, end indexes for each span """
         return [s.len for s in self.spans]
 
     def truncate(self, MAX=50):
         """ Randomly truncate the document to up to MAX sentences """
-        sentences = [idx
-                     for idx, token in enumerate(self.tokens)
-                     if token in ['.', '?', '!']]
 
-        if len(sentences) > MAX:
-            i = random.sample(range(MAX, len(sentences)), 1)[0]
-            tokens = self.tokens[sentences[i-50]:sentences[i]]
+        if len(self.sents) > MAX:
+            i = random.sample(range(MAX, len(self.sents)), 1)[0]
+            tokens = flatten(self.sents[i-MAX:i])
             return self.__class__(c(self.raw_text), tokens,
                                   c(self.corefs), c(self.speakers),
                                   c(self.genre), c(self.filename))
@@ -309,10 +323,10 @@ def clean_token(token):
         cleaned_token = ","
     return cleaned_token
 
-def doc_to_tensor(document, vectorizer):
-    """ Convert a sentence to a tensor """
-    return to_cuda(torch.tensor([vectorizer.stoi(token)
-                                 for token in document.tokens]))
+def lookup_tensor(tokens, vectorizer):
+    """ Convert a sentence to an embedding lookup tensor """
+    return to_cuda(torch.tensor([vectorizer.stoi(t) for t in tokens]))
+
 
 # Load in corpus, lazily load in word vectors.
 train_corpus = read_corpus('../data/train/')
