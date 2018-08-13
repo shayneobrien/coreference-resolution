@@ -4,8 +4,7 @@ from torch.autograd import Variable
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 import numpy as np
-
-from boltons.iterutils import windowed
+from boltons.iterutils import pairwise, windowed
 from itertools import groupby, combinations
 from collections import defaultdict
 

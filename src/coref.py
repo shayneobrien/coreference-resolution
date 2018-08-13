@@ -42,7 +42,8 @@ class Score(nn.Module):
 
 
 class Distance(nn.Module):
-    """ Learned, continuous representations for: span size, width between spans
+    """ Learned, continuous representations for: span widths, distance
+    between spans
     """
 
     bins = [1,2,3,4,8,16,32,64]
@@ -58,7 +59,7 @@ class Distance(nn.Module):
 
     def forward(self, *args):
         """ Embedding table lookup """
-        return self.embeds(self.stoi(*args)).squeeze()
+        return self.embeds(self.stoi(*args))
 
     def stoi(self, lengths):
         """ Find which bin a number falls into """
