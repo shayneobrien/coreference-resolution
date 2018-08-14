@@ -138,6 +138,7 @@ class CharCNN(nn.Module):
 
     def sent_to_tensor(self, sent):
         """ Batch-ify a document class instance for CharCNN embeddings """
+        # TODO: batch this, make sure gradients not required
         tokens = [self.token_to_idx(t) for t in sent]
         batch = self.char_pad_and_stack(tokens)
         return batch
@@ -152,6 +153,8 @@ class CharCNN(nn.Module):
 
         lens = [len(t) for t in skimmed]
 
+        # TODO: pad_sequence but need a max_len to specify or bake in alternative
+        # by padding just one to max_len
         padded = [F.pad(t, (0, self.pad_size-length))
                   for t, length in zip(skimmed, lens)]
 
@@ -200,6 +203,7 @@ class DocumentEncoder(nn.Module):
         """ Convert document words to ids, embed them, pass through LSTM. """
 
         # Embed document
+        # TODO: can we batch this? Since we pad and pack later anyway
         embeds = [self.embed(s) for s in doc.sents]
 
         # Batch for LSTM
@@ -212,6 +216,8 @@ class DocumentEncoder(nn.Module):
         unpacked = unpack_and_unpad(output, reorder)
 
         # Apply dropout
+        # TODO: batch this (how to apply dropout to packed sequence,
+        # might be allowed to bake into lstm module)
         states = [self.lstm_dropout(tensor) for tensor in unpacked]
 
         return torch.cat(states, dim=0), torch.cat(embeds, dim=0)
@@ -282,7 +288,7 @@ class MentionScore(nn.Module):
         widths = self.width([len(s) for s in spans])
 
         # Get LSTM state for start, end indexes
-        # TODO: is there a better way to do this?
+        # TODO: is there a better way to do this? (idts but check)
         start_end = torch.stack([torch.cat((states[s.i1], states[s.i2]))
                                  for s in spans])
 
@@ -357,7 +363,9 @@ class PairwiseScore(nn.Module):
         sij_scores = (si + sj + pairwise_scores).squeeze()
 
         # Update spans with set of possible antecedents' indices, scores
-        #TODO: can we avoid splitting tensors here? (pad_and_stack)
+        #TODO: can we avoid splitting tensors here? (pad_and_stack,
+        # more selective indexing? the sums add a lot of leaves in train_doc
+        # section of trainer (splice and individual adding))
         spans = [
             attr.evolve(span,
                         sij=torch.cat((sij_scores[i1:i2], to_var(torch.tensor([0.]))), dim=0),
@@ -407,9 +415,9 @@ class CorefScore(nn.Module):
         spans, g_i, mention_scores = self.score_spans(states, embeds, doc)
 
         # Get pairwise scores for each span combo
-        pairs = self.score_pairs(spans, g_i, mention_scores)
+        spans = self.score_pairs(spans, g_i, mention_scores)
 
-        return pairs
+        return spans
 
 
 class Trainer:
@@ -436,8 +444,8 @@ class Trainer:
         for epoch in range(1, num_epochs+1):
             self.train_epoch(epoch, *args, **kwargs)
 
-        # Save often
-        self.save_model(str(datetime.now()))
+            # Save often
+            self.save_model(str(datetime.now()))
 
             # Evaluate every eval_interval epochs
             if epoch % eval_interval == 0:

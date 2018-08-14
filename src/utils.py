@@ -56,6 +56,8 @@ def pad_and_stack(tensors, pad_size=None, value=0):
         pad_size = max(sizes)
 
     # Pad all sentences to the max observed size
+    # TODO: why does pad_sequence blow up backprop time?
+    # These slices are not efficient
     padded = torch.stack([F.pad(input=sent[:pad_size],
                                 pad=(0, 0, 0, max(0, pad_size-size)),
                                 value=value)
