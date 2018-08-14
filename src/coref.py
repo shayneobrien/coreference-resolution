@@ -282,6 +282,7 @@ class MentionScore(nn.Module):
         widths = self.width([len(s) for s in spans])
 
         # Get LSTM state for start, end indexes
+        # TODO: is there a better way to do this?
         start_end = torch.stack([torch.cat((states[s.i1], states[s.i2]))
                                  for s in spans])
 

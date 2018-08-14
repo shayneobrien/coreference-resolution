@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 from torch.autograd import Variable
-from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence, pad_sequence
 
 import numpy as np
 from boltons.iterutils import pairwise, windowed
@@ -86,17 +86,30 @@ def pack(padded, sizes, batch_first=True):
 def prune(spans, T, LAMBDA=0.40):
     """ Prune mention scores to the top lambda percent.
     Returns list of tuple(scores, indices, g_i) """
-    STOP = int(LAMBDA * T) # lambda * document_length
 
-    sorted_spans = sorted(spans, key=lambda s: s.si, reverse=True) # sort by mention score
-    nonoverlapping = remove_overlapping(sorted_spans) # remove overlapping spans
-    pruned_spans = nonoverlapping[:STOP] # prune to the top λT spans, sort by idx
+    # Only take top λT spans, where T = len(doc)
+    STOP = int(LAMBDA * T)
 
+    # Sort by mention score, remove overlapping spans, prune to top λT spans
+    sorted_spans = sorted(spans, key=lambda s: s.si, reverse=True)
+    nonoverlapping = remove_overlapping(sorted_spans)
+    pruned_spans = nonoverlapping[:STOP]
+
+    # Resort by start, end indexes
     spans = sorted(pruned_spans, key=lambda s: (s.i1, s.i2))
+
     return spans
 
 def remove_overlapping(sorted_spans):
-    """ Remove spans that are overlapping by order of decreasing mention score """
+    """ Remove spans that are overlapping by order of decreasing mention score
+    unless the current span i yields true to the following condition with any
+    previously accepted span j:
+
+    si.i1 < sj.i1 <= si.i2 < sj.i2   OR
+    sj.i1 < si.i1 <= sj.i2 < si.i2 """
+
+    # Nonoverlapping will be accepted spans, seen is start, end indexes that
+    # have already been seen in an accepted span
     nonoverlapping, seen = [], set()
     for s in sorted_spans:
         indexes = range(s.i1, s.i2+1)

@@ -164,7 +164,7 @@ For adding new features: Carlos Rica, David Coppit, Carlos Segre, Lyon Lemmens
 For bug reports: Ying Yang, Joerg Beyer, Marc Logghe, Yunheng Wang,
 Torsten Seemann, Gerrit Haase, Joern Behre, Lyon Lemmens, Federico Lucifredi
 
-=head1 BUGS / TODO
+=head1 BUGS
 
 Report them to the author.
 
@@ -1041,4 +1041,3 @@ sub _permutation_cursor {
 }
 
 1;
-
