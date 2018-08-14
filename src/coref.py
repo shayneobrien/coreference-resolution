@@ -587,7 +587,7 @@ class Trainer:
         clusters = list(nx.connected_components(graph))
 
         # Initialize token tags
-        token_tags = [[] for _ in range(len(document))]
+        token_tags = [[] for _ in range(len(doc))]
 
         # Add in cluster ids for each cluster of corefs in place of token tag
         for idx, cluster in enumerate(clusters):
@@ -621,8 +621,9 @@ class Trainer:
         # Dump predictions
         with io.open(preds_file, 'w', encoding='utf-8', errors='strict') as f:
 
-            current_idx = 0
             for doc in val_corpus:
+
+                current_idx = 0
 
                 for line in doc.raw_text:
 
