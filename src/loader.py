@@ -325,9 +325,9 @@ train_corpus = read_corpus('../data/train/')
 val_corpus = read_corpus('../data/development/')
 test_corpus = read_corpus('../data/test/')
 
-VECTORS = LazyVectors.from_corpus(train_corpus.vocab,
-                                  name='glove.840B.300d.txt',
-                                  cache='/Users/sob/github/.vector_cache/')
+GLOVE = LazyVectors.from_corpus(train_corpus.vocab,
+                                name='glove.840B.300d.txt',
+                                cache='/Users/sob/github/.vector_cache/')
 
 TURIAN = LazyVectors.from_corpus(train_corpus.vocab,
                                  name='hlbl-embeddings-scaled.EMBEDDING_SIZE=50',

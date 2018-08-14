@@ -169,22 +169,25 @@ class DocumentEncoder(nn.Module):
     def __init__(self, hidden_dim, char_filters, n_layers=2):
         super().__init__()
 
-        weights = VECTORS.weights()
-        turian_weights = TURIAN.weights()
+        # Unit vector embeddings as per Section 7.1 of paper
+        glove_weights = F.normalize(GLOVE.weights())
+        turian_weights = F.normalize(TURIAN.weights())
 
         # GLoVE
-        self.embeddings = nn.Embedding(weights.shape[0], weights.shape[1])
-        self.embeddings.weight.data.copy_(weights)
+        self.glove = nn.Embedding(glove_weights.shape[0], glove_weights.shape[1])
+        self.glove.weight.data.copy_(glove_weights)
+        self.glove.weight.requires_grad = False
 
         # Turian
         self.turian = nn.Embedding(turian_weights.shape[0], turian_weights.shape[1])
         self.turian.weight.data.copy_(turian_weights)
+        self.turian.weight.requires_grad = False
 
         # Character
         self.char_embeddings = CharCNN(char_filters)
 
         # Sentence-LSTM
-        self.lstm = nn.LSTM(weights.shape[1]+turian_weights.shape[1]+char_filters,
+        self.lstm = nn.LSTM(glove_weights.shape[1]+turian_weights.shape[1]+char_filters,
                             hidden_dim,
                             num_layers=n_layers,
                             bidirectional=True,
@@ -217,10 +220,10 @@ class DocumentEncoder(nn.Module):
         """ Embed a sentence using GLoVE, Turian, and character embeddings """
 
         # Convert document tokens to look up ids
-        glove_tensor = lookup_tensor(sent, VECTORS)
+        glove_tensor = lookup_tensor(sent, GLOVE)
 
         # Embed the tokens with Glove, apply dropout
-        glove_embeds = self.embeddings(glove_tensor)
+        glove_embeds = self.glove(glove_tensor)
         glove_embeds = self.emb_dropout(glove_embeds)
 
         # Convert document tokens to Turian look up IDs
@@ -324,8 +327,10 @@ class PairwiseScore(nn.Module):
         """ Compute pairwise score for spans and their up to K antecedents
         """
 
-        # Get raw feature input for distance, genre, speaker
-        distances, genres, speakers = zip(*[(i.i2-j.i1, i.genre, speaker_label(i, j))
+        mention_ids, antecedent_ids, \
+            distances, genres, speakers = zip(*[(i.id, j.id,
+                                                i.i2-j.i1, i.genre,
+                                                speaker_label(i, j))
                                              for i in spans
                                              for j in i.yi])
 
@@ -333,12 +338,6 @@ class PairwiseScore(nn.Module):
         phi = torch.cat((self.distance(distances),
                          self.genre(genres),
                          self.speaker(speakers)), dim=1)
-
-        # TODO: combine this with distances, genres, speakers passover
-        # Get IDs for each mention, its antecedents
-        mention_ids, antecedent_ids = zip(*[(i.id, j.id)
-                                            for i in spans
-                                            for j in i.yi])
 
         # Extract their span representations from the g_i matrix
         i_g, j_g = g_i[[mention_ids]], g_i[[antecedent_ids]]
@@ -419,30 +418,36 @@ class Trainer:
                     lr=1e-3, steps=100):
 
         self.__dict__.update(locals())
+
         self.train_corpus = list(self.train_corpus)
         self.model = to_cuda(model)
 
         self.optimizer = optim.Adam(params=[p for p in self.model.parameters()
                                             if p.requires_grad],
                                     lr=lr)
-        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer,
-                                                    step_size=100,
-                                                    gamma=0.001)
 
-    def train(self, num_epochs, *args, **kwargs):
+        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer,
+                                                   step_size=100,
+                                                   gamma=0.001)
+
+    def train(self, num_epochs, eval_interval=10, *args, **kwargs):
         """ Train a model """
         for epoch in range(1, num_epochs+1):
             self.train_epoch(epoch, *args, **kwargs)
-            # Evaluate every now and then
-            if epoch % 10 == 0:
+
+        # Save often
+        self.save_model(str(datetime.now()))
+
+            # Evaluate every eval_interval epochs
+            if epoch % eval_interval == 0:
                 print('\n\nEVALUATION\n\n')
                 self.model.eval()
-                self.save_model(str(datetime.now()))
                 results = self.evaluate(self.val_corpus)
                 print(results)
 
     def train_epoch(self, epoch):
         """ Run a training epoch over 'steps' documents """
+
         # Set model to train (enables dropout)
         self.model.train()
 
@@ -550,8 +555,9 @@ class Trainer:
         results = str(stdout).split('TOTALS')[-1]
 
         # Write the results out for later viewing
-        with open('../preds/results.txt', 'w') as f:
+        with open('../preds/results.txt', 'w+') as f:
             f.write(results)
+            f.write('\n\n\n')
 
         return results
 
