@@ -253,12 +253,17 @@ class MentionScore(nn.Module):
         """ Compute unary mention score for each span
         """
 
+        # Initialize Span objects containing start index, end index, genre, speaker
+        spans = [Span(i1=i[0], i2=i[-1], id=idx,
+                      speaker=doc.speaker(i), genre=doc.genre)
+                 for idx, i in enumerate(compute_idx_spans(doc.sents))]
+
         # Compute first part of attention over span states (alpha_t)
         attns = self.attention(states)
 
         # Regroup attn values, embeds into span representations
         span_attns, span_embeds = zip(*[(attns[s.i1:s.i2+1], embeds[s.i1:s.i2+1])
-                                        for s in doc.spans])
+                                        for s in spans])
 
         # Pad and stack span attention values, span embeddings for batching
         padded_attns, _ = pad_and_stack(span_attns, value=-1e10)
@@ -271,11 +276,11 @@ class MentionScore(nn.Module):
         attn_embeds = (padded_embeds * attn_weights).sum(dim=1)
 
         # Compute span widths (i.e. lengths), embed them
-        widths = self.width(doc.widths)
+        widths = self.width([len(s) for s in spans])
 
         # Get LSTM state for start, end indexes
         start_end = torch.stack([torch.cat((states[s.i1], states[s.i2]))
-                                 for s in doc.spans])
+                                 for s in spans])
 
         # Cat it all together to get g_i, our span representation
         g_i = torch.cat((start_end, attn_embeds, widths), dim=1)
@@ -287,14 +292,14 @@ class MentionScore(nn.Module):
         # (use detach so we don't get crazy gradients by splitting the tensors)
         spans = [
             attr.evolve(span, si=si)
-            for idx, (span, si)
-            in enumerate(zip(doc.spans, mention_scores.detach()))
+            for span, si
+            in zip(spans, mention_scores.detach())
         ]
 
         # Prune down to LAMBDA*len(doc) spans
         spans = prune(spans, len(doc))
 
-        # Update antencedent set (yi) for each mention
+        # Update antencedent set (yi) for each mention up to K previous antecedents
         spans = [
             attr.evolve(span, yi=spans[max(0, idx-K):idx])
             for idx, span in enumerate(spans)
@@ -652,5 +657,5 @@ class Trainer:
 
 # Initialize model, train
 model = CorefScore(embeds_dim=400, hidden_dim=200)
-trainer = Trainer(model, train_corpus, val_corpus, test_corpus, steps=2802)
-trainer.train(150)
+trainer = Trainer(model, train_corpus, val_corpus, test_corpus, steps=150)
+trainer.train(10)

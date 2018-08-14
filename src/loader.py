@@ -77,17 +77,11 @@ class Document:
         # Regroup (returns list of lists)
         return [self.tokens[i1:i2] for i1, i2 in pairwise([0] + sent_idx)]
 
-    @cached_property
     def spans(self):
         """ Create Span object for each span """
         return [Span(i1=i[0], i2=i[-1], id=idx,
                     speaker=self.speaker(i), genre=self.genre)
                 for idx, i in enumerate(compute_idx_spans(self.sents))]
-
-    @cached_property
-    def widths(self):
-        """ Distances between start, end indexes for each span """
-        return [len(s) for s in self.spans]
 
     def truncate(self, MAX=50):
         """ Randomly truncate the document to up to MAX sentences """
