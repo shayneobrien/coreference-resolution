@@ -225,7 +225,7 @@ class LazyVectors:
 
 
 def read_corpus(dirname):
-    conll_files = parse_filenames(dirname = dirname, pattern = "*gold_conll")
+    conll_files = parse_filenames(dirname=dirname, pattern="*gold_conll")
     return Corpus(flatten([load_file(file) for file in conll_files]))
 
 def load_file(filename):
@@ -260,7 +260,7 @@ def load_file(filename):
 
             # End of document: organize the data, append to output, reset variables for next document.
             elif len(cols) == 2:
-                doc = fix_coref_spans(Document(raw_text, tokens, utts_corefs, utts_speakers, genre, filename))
+                doc = Document(raw_text, tokens, utts_corefs, utts_speakers, genre, filename)
                 documents.append(doc)
                 raw_text, tokens, text, utts_corefs, utts_speakers, index = [], [], [], [], [], 0
 
@@ -278,17 +278,25 @@ def load_file(filename):
                         match = re.match(r"^(\(?)(\d+)(\)?)$", token)
                         label = match.group(2)
 
-                        # If it does, extract the coref label, its start index, and end index.
+                        # If it does, extract the coref label, its start index,
                         if match.group(1) == u'(':
-                            corefs.append({'label': label, 'start': index, 'end': None, 'span': None})
+                            corefs.append({'label': label,
+                                           'start': index,
+                                           'end': None})
+
                         if match.group(3) == u')':
                             for i in range(len(corefs)-1, -1, -1):
                                 if corefs[i]['label'] == label and corefs[i]['end'] is None:
                                     break
-                            corefs[i]['end'] = index
+
+                            # Extract the end index, include start and end indexes in 'span'
+                            corefs[i].update({'end': index,
+                                              'span': (corefs[i]['start'], index)})
+
                 index += 1
             else:
-                # Beginning of Documeent, beginning of file, end of file: nothing to scrape off
+
+                # Beginning of Document, beginning of file, end of file: nothing to scrape off
                 continue
 
     return documents

@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 from torch.autograd import Variable
-from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence, pad_sequence
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence, pack_sequence
 
 import numpy as np
 from boltons.iterutils import pairwise, windowed
@@ -34,16 +34,6 @@ def unpack_and_unpad(lstm_out, reorder):
 
     return regrouped
 
-def pad_and_pack(tensors):
-    """ Pad and pack a list of sentences to allow for batching of
-    variable length sequences in LSTM modules """
-
-    # Pad variables to longest observed length, stack them
-    padded, sizes = pad_and_stack(tensors)
-
-    # Pack the variables to mask the padding
-    return pack(padded, sizes)
-
 def pad_and_stack(tensors, pad_size=None, value=0):
     """ Pad and stack an uneven tensor of token lookup ids.
     Assumes num_sents in first dimension (batch_first=True)"""
@@ -65,25 +55,29 @@ def pad_and_stack(tensors, pad_size=None, value=0):
 
     return padded, sizes
 
-def pack(padded, sizes, batch_first=True):
-    """Pack padded variables, provide reorder indexes """
+def pack(tensors):
+    """ Pack list of tensors, provide reorder indexes """
+
+    # Get sizes
+    sizes = [t.shape[0] for t in tensors]
 
     # Get indexes for sorted sizes (largest to smallest)
-    size_sort = np.argsort(sizes)[::-1].tolist()
+    size_sort = np.argsort(sizes)[::-1]
 
     # Resort the tensor accordingly
-    padded = padded[torch.tensor(size_sort, requires_grad=False)]
+    sorted_tensors = [tensors[i] for i in size_sort]
 
     # Resort sizes in descending order
     sizes = sorted(sizes, reverse=True)
 
     # Pack the padded sequences
-    packed = pack_padded_sequence(padded, sizes, batch_first)
+    packed = pack_sequence(sorted_tensors)
 
     # Regroup indexes for restoring tensor to its original order
     reorder = torch.tensor(np.argsort(size_sort), requires_grad=False)
 
     return packed, reorder
+
 
 def prune(spans, T, LAMBDA=0.40):
     """ Prune mention scores to the top lambda percent.
@@ -130,6 +124,7 @@ def pairwise_indexes(spans):
 
 def extract_gold_corefs(document):
     """ Parse coreference dictionary of a document to get coref links """
+    
     # Initialize defaultdict for keeping track of corefs
     gold_links = defaultdict(list)
 
@@ -154,16 +149,6 @@ def extract_gold_corefs(document):
     total_corefs = len(gold_corefs)
 
     return gold_corefs, total_corefs, gold_mentions, total_mentions
-
-def fix_coref_spans(doc):
-    """ Add in token spans to corefs dict.
-    Done post-hoc due to way text variable is updated """
-    token_idxs = range(len(doc.tokens))
-
-    for idx, coref in enumerate(doc.corefs):
-        doc.corefs[idx]['word_span'] = tuple(doc.tokens[coref['start']:coref['end']+1])
-        doc.corefs[idx]['span'] = tuple([coref['start'], coref['end']])
-    return doc
 
 def compute_idx_spans(sentences, L=10):
     """ Compute span indexes for all possible spans up to length L in each

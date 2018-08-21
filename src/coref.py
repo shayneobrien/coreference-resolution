@@ -197,28 +197,29 @@ class DocumentEncoder(nn.Module):
                             batch_first=True)
 
         # Dropout
-        self.emb_dropout, self.lstm_dropout = nn.Dropout(0.50), nn.Dropout(0.20)
+        self.emb_dropout = nn.Dropout(0.50, inplace=True)
+        self.lstm_dropout = nn.Dropout(0.20, inplace=True)
 
     def forward(self, doc):
         """ Convert document words to ids, embed them, pass through LSTM. """
 
         # Embed document
-        # TODO: can we batch this? Since we pad and pack later anyway
         embeds = [self.embed(s) for s in doc.sents]
 
         # Batch for LSTM
-        packed, reorder = pad_and_pack(embeds)
+        packed, reorder = pack(embeds)
+
+        # Apply embedding dropout
+        self.emb_dropout(packed[0])
 
         # Pass an LSTM over the embeds
         output, _ = self.lstm(packed)
 
-        # Undo the packing/padding required for batching
-        unpacked = unpack_and_unpad(output, reorder)
-
         # Apply dropout
-        # TODO: batch this (how to apply dropout to packed sequence,
-        # might be allowed to bake into lstm module)
-        states = [self.lstm_dropout(tensor) for tensor in unpacked]
+        self.lstm_dropout(output[0])
+
+        # Undo the packing/padding required for batching
+        states = unpack_and_unpad(output, reorder)
 
         return torch.cat(states, dim=0), torch.cat(embeds, dim=0)
 
