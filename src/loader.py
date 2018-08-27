@@ -119,14 +119,8 @@ class Span:
     # Unary mention score, as tensor
     si = attr.ib(default=None)
 
-    # Span representation
-    g = attr.ib(default=None)
-
     # List of candidate antecedent spans
     yi = attr.ib(default=None)
-
-    # Pairwise scores for each yi
-    sij = attr.ib(default=None)
 
     # Corresponding span ids to each yi
     yi_idx = attr.ib(default=None)

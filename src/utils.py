@@ -46,8 +46,7 @@ def pad_and_stack(tensors, pad_size=None, value=0):
         pad_size = max(sizes)
 
     # Pad all sentences to the max observed size
-    # TODO: why does pad_sequence blow up backprop time?
-    # These slices are not efficient
+    # TODO: why does pad_sequence blow up backprop time? (copy vs. slice issue)
     padded = torch.stack([F.pad(input=sent[:pad_size],
                                 pad=(0, 0, 0, max(0, pad_size-size)),
                                 value=value)
@@ -124,7 +123,7 @@ def pairwise_indexes(spans):
 
 def extract_gold_corefs(document):
     """ Parse coreference dictionary of a document to get coref links """
-    
+
     # Initialize defaultdict for keeping track of corefs
     gold_links = defaultdict(list)
 

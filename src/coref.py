@@ -126,19 +126,16 @@ class CharCNN(nn.Module):
         self.convs = nn.ModuleList([nn.Conv1d(in_channels=self.pad_size,
                                               out_channels=filters,
                                               kernel_size=n) for n in (3,4,5)])
-        self.cnn_dropout = nn.Dropout(0.20)
 
     def forward(self, sent):
         """ Compute filter-dimensional character-level features for each doc token """
         embedded = self.embeddings(self.sent_to_tensor(sent))
         convolved = torch.cat([F.relu(conv(embedded)) for conv in self.convs], dim=2)
-        pooled = F.max_pool1d(convolved, convolved.shape[2])
-        output = self.cnn_dropout(pooled).squeeze(2)
-        return output
+        pooled = F.max_pool1d(convolved, convolved.shape[2]).squeeze(2)
+        return pooled
 
     def sent_to_tensor(self, sent):
         """ Batch-ify a document class instance for CharCNN embeddings """
-        # TODO: batch this, make sure gradients not required
         tokens = [self.token_to_idx(t) for t in sent]
         batch = self.char_pad_and_stack(tokens)
         return batch
@@ -153,8 +150,6 @@ class CharCNN(nn.Module):
 
         lens = [len(t) for t in skimmed]
 
-        # TODO: pad_sequence but need a max_len to specify or bake in alternative
-        # by padding just one to max_len
         padded = [F.pad(t, (0, self.pad_size-length))
                   for t, length in zip(skimmed, lens)]
 
@@ -226,19 +221,11 @@ class DocumentEncoder(nn.Module):
     def embed(self, sent):
         """ Embed a sentence using GLoVE, Turian, and character embeddings """
 
-        # Convert document tokens to look up ids
-        glove_tensor = lookup_tensor(sent, GLOVE)
+        # Embed the tokens with Glove
+        glove_embeds = self.glove(lookup_tensor(sent, GLOVE))
 
-        # Embed the tokens with Glove, apply dropout
-        glove_embeds = self.glove(glove_tensor)
-        glove_embeds = self.emb_dropout(glove_embeds)
-
-        # Convert document tokens to Turian look up IDs
-        tur_tensor = lookup_tensor(sent, TURIAN)
-
-        # Embed again using Turian this time, dropout
-        tur_embeds = self.turian(tur_tensor)
-        tur_embeds = self.emb_dropout(tur_embeds)
+        # Embed again using Turian this time
+        tur_embeds = self.turian(lookup_tensor(sent, TURIAN))
 
         # Character embeddings
         char_embeds = self.char_embeddings(sent)
@@ -272,6 +259,7 @@ class MentionScore(nn.Module):
         attns = self.attention(states)
 
         # Regroup attn values, embeds into span representations
+        # TODO: figure out a way to batch
         span_attns, span_embeds = zip(*[(attns[s.i1:s.i2+1], embeds[s.i1:s.i2+1])
                                         for s in spans])
 
@@ -283,13 +271,13 @@ class MentionScore(nn.Module):
         attn_weights = F.softmax(padded_attns, dim=1)
 
         # Compute self-attention over embeddings (x_hat)
-        attn_embeds = (padded_embeds * attn_weights).sum(dim=1)
+        attn_embeds = torch.sum(torch.mul(padded_embeds, attn_weights), dim=1)
 
         # Compute span widths (i.e. lengths), embed them
         widths = self.width([len(s) for s in spans])
 
         # Get LSTM state for start, end indexes
-        # TODO: is there a better way to do this? (idts but check)
+        # TODO: figure out a way to batch
         start_end = torch.stack([torch.cat((states[s.i1], states[s.i2]))
                                  for s in spans])
 
@@ -303,8 +291,7 @@ class MentionScore(nn.Module):
         # (use detach so we don't get crazy gradients by splitting the tensors)
         spans = [
             attr.evolve(span, si=si)
-            for span, si
-            in zip(spans, mention_scores.detach())
+            for span, si in zip(spans, mention_scores.detach())
         ]
 
         # Prune down to LAMBDA*len(doc) spans
@@ -335,6 +322,7 @@ class PairwiseScore(nn.Module):
         """ Compute pairwise score for spans and their up to K antecedents
         """
 
+        # Extract raw features
         mention_ids, antecedent_ids, \
             distances, genres, speakers = zip(*[(i.id, j.id,
                                                 i.i2-j.i1, i.genre,
@@ -342,40 +330,57 @@ class PairwiseScore(nn.Module):
                                              for i in spans
                                              for j in i.yi])
 
+        # For indexing a tensor efficiently
+        mention_ids = to_cuda(torch.tensor(mention_ids))
+        antecedent_ids = to_cuda(torch.tensor(antecedent_ids))
+
         # Embed them
         phi = torch.cat((self.distance(distances),
                          self.genre(genres),
                          self.speaker(speakers)), dim=1)
 
         # Extract their span representations from the g_i matrix
-        i_g, j_g = g_i[[mention_ids]], g_i[[antecedent_ids]]
+        i_g = torch.index_select(g_i, 0, mention_ids)
+        j_g = torch.index_select(g_i, 0, antecedent_ids)
 
         # Create s_ij representations
         pairs = torch.cat((i_g, j_g, i_g*j_g, phi), dim=1)
 
-        # Score pairs of spans for coreference link
-        pairwise_scores = self.score(pairs)
-
         # Extract mention score for each mention and its antecedents
-        si, sj = mention_scores[[mention_ids]], mention_scores[[antecedent_ids]]
+        s_i = torch.index_select(mention_scores, 0, mention_ids)
+        s_j = torch.index_select(mention_scores, 0, antecedent_ids)
+
+        # Score pairs of spans for coreference link
+        s_ij = self.score(pairs)
 
         # Compute pairwise scores for coreference links between each mention and
         # its antecedents
-        sij_scores = (si + sj + pairwise_scores).squeeze()
+        coref_scores = torch.sum(torch.cat((s_i, s_j, s_ij), dim=1), dim=1, keepdim=True)
 
         # Update spans with set of possible antecedents' indices, scores
-        #TODO: can we avoid splitting tensors here? (pad_and_stack,
-        # more selective indexing? the sums add a lot of leaves in train_doc
-        # section of trainer (splice and individual adding))
         spans = [
             attr.evolve(span,
-                        sij=torch.cat((sij_scores[i1:i2], to_var(torch.tensor([0.]))), dim=0),
                         yi_idx=[((y.i1, y.i2), (span.i1, span.i2)) for y in span.yi]
-                       )
-            for span, (i1, i2) in zip(spans, pairwise_indexes(spans))
+                        )
+            for span, score, (i1, i2) in zip(spans, coref_scores, pairwise_indexes(spans))
         ]
 
-        return spans
+        # Get antecedent indexes for each span
+        antecedent_idx = [len(s.yi) for s in spans if len(s.yi)]
+
+        # Split coref scores so each list entry are scores for its antecedents, only.
+        # (NOTE that first index is a special case for torch.split, so we handle it here)
+        split_scores = [to_cuda(torch.tensor([]))] \
+                         + list(torch.split(coref_scores, antecedent_idx, dim=0))
+
+        epsilon = to_var(torch.tensor([[0.]]))
+        with_epsilon = [torch.cat((score, epsilon), dim=0) for score in split_scores]
+
+        # Batch and softmax
+        scores, _ = pad_and_stack(with_epsilon, value=-1e10)
+        probs = F.softmax(scores, dim=1).squeeze()
+
+        return spans, probs
 
 
 class CorefScore(nn.Module):
@@ -416,9 +421,9 @@ class CorefScore(nn.Module):
         spans, g_i, mention_scores = self.score_spans(states, embeds, doc)
 
         # Get pairwise scores for each span combo
-        spans = self.score_pairs(spans, g_i, mention_scores)
+        spans, coref_scores = self.score_pairs(spans, g_i, mention_scores)
 
-        return spans
+        return spans, coref_scores
 
 
 class Trainer:
@@ -502,47 +507,46 @@ class Trainer:
         # Zero out optimizer gradients
         self.optimizer.zero_grad()
 
-        losses, mentions_found, corefs_found, corefs_chosen = [], [], [], []
-        for span in self.model(document):
+        # Init metrics
+        mentions_found, corefs_found, corefs_chosen = 0, 0, 0
+
+        # Predict coref probabilites for each span in a document
+        spans, probs = self.model(document)
+
+        # Get log-likelihood of correct antecedents implied by gold clustering
+        gold_indexes = to_cuda(torch.zeros_like(probs))
+        for idx, span in enumerate(spans):
 
             # Log number of mentions found
             if (span.i1, span.i2) in gold_mentions:
-                mentions_found.append(1)
+                mentions_found += 1
 
             # Check which of these tuples are in the gold set, if any
-            gold_idx = [
-                idx for idx, link in enumerate(span.yi_idx)
+            golds = [
+                i for i, link in enumerate(span.yi_idx)
                 if link in gold_corefs
             ]
 
-            # If gold_pred_idx is empty, set gold to dummy
-            if not gold_idx:
-                gold_idx = [len(span.sij)-1]
+            # If gold_pred_idx is not empty, consider the probabilities of the found antecedents
+            if golds:
+                gold_indexes[idx, golds] = 1
+
+                # Progress logging for recall
+                corefs_found += len(golds)
+                found_corefs = sum((probs[idx, golds] > probs[idx, len(span.yi_idx)])).detach()
+                corefs_chosen += found_corefs.item()
             else:
-                corefs_found.append(len(gold_idx))
-                found_corefs = [1 for score in span.sij if score > 0.]
-                corefs_chosen.append(len(found_corefs))
+                # Otherwise, set gold to dummy
+                gold_indexes[idx, len(span.yi_idx)] = 1
 
-            # Conditional probability distribution over antecedents
-            probs = F.softmax(span.sij, dim=0)
+        # Negative marginal log-likelihood
+        loss = torch.sum(torch.log(torch.sum(torch.mul(probs, gold_indexes), dim=1)), dim=0) * -1
 
-            # Log-likelihood of correct antecedents implied by gold clustering
-            mass = torch.log(sum([probs[i] for i in gold_idx]))
-
-            # Save the loss for this span
-            losses.append(mass)
-
-        # Negative marginal log-likelihood for minimizing, backpropagate
-        loss = sum(losses) * -1
+        # Backpropagate
         loss.backward()
 
         # Step the optimizer
         self.optimizer.step()
-
-        # Compute recall
-        mentions_found = sum(mentions_found)
-        corefs_found = sum(corefs_found)
-        corefs_chosen = sum(corefs_chosen)
 
         return (loss.item(), mentions_found, total_mentions,
                 corefs_found, total_corefs, corefs_chosen)
@@ -581,15 +585,15 @@ class Trainer:
         graph = nx.Graph()
 
         # Pass the document through the model
-        spans = self.model(doc)
+        spans, probs = self.model(doc)
 
         # Cluster found coreference links
         for i, span in enumerate(spans):
 
             # Loss implicitly pushes coref links above 0, rest below 0
             found_corefs = [idx
-                            for idx, score in enumerate(span.sij)
-                            if score > 0.]
+                            for idx, _ in enumerate(span.yi_idx)
+                            if probs[i, idx] > probs[i, len(span.yi_idx)]]
 
             # If we have any
             if any(found_corefs):
