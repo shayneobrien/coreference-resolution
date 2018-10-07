@@ -37,14 +37,19 @@ As a forewarning, this paper presents a beast of a model. The authors present th
 
 ![](/imgs/architecture.png)
 
+#### Token Representation ####
 Tokens are represented using 300-dimension static GloVe embeddings, 50-dimensional static Turian embeddings, and 8-dimensional character embeddings from a CNN with 50-dimensional filter sizes 3, 4, and 5. Dropout with p=0.50 is applied to these embeddings. The token representations are passed into a 2-layer bidirectional LSTM with hidden state sizes of 200. Dropout with p=0.20 is applied to the output of the LSTM.
 
+#### Span Representation ####
 Using the regularized output, span representations are computed by extracting the LSTM hidden states between the index of the first word and the last word. These are used to compute a weighted sum of the hidden states. Then, we concatenate the first and last index with the weighted attention sum and a 20-dimensional feature representation for the total width (length) of the span under consideration. This is done for all spans up to length 10 in the document.
 
+#### Pruning ####
 The span representations are passed into a 3-layer, 150-dimensional feedforward network with ReLU activations and p=0.20 dropout applied between each layer. The output of this feedfoward network is 1-dimensional and represents the 'mention score' of each span in the document. Spans are then pruned in decreasing order of mention score unless, when considering a span i, there exists a previously accepted span j such that START(i) < START(j) <= END(i) < END(j) or START(j) < START(i) <= END(j) < END(j). Only LAMBDA * T spans are kept at the end, where LAMBDA is set to 0.40 and T is the document length.
 
+#### Pairwise Representation ####
 For these spans, pairwise representations are computed for a given span i and its antecedent j by concatenating the span representation for span i, the span representation for span j, the dot product between these representations, and 20-dimensional feature embeddings for genre, distance between the spans, and whether or not the two spans have the same speaker.
 
+#### Final Score and Loss ####
 These representations are passed into a feedforward network similar to that of scoring the spans. Clusters are then formed for these coreferences by identifying chains of coreference links (e.g. span j and span k both refer to span i). The learning objective is to maximize the log-likelihood of all correct antecedents that were not pruned.
 
 # Results
