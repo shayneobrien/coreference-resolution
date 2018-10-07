@@ -1,7 +1,7 @@
 # Coreference Resolution
 PyTorch 0.4.1 | Python 3.6.5
 
-This repository consists of an efficient, annotated PyTorch reimplementation of the EMNLP paper ["End-to-end Neural Coreference Resolution"](https://arxiv.org/pdf/1707.07045.pdf) by Lee et al., 2017.
+This repository consists of an efficient, annotated PyTorch reimplementation of the EMNLP paper ["End-to-end Neural Coreference Resolution"](https://arxiv.org/pdf/1707.07045.pdf) by Lee et al., 2017. Main code can be found [in this file](https://github.com/shayneobrien/coreference-resolution/blob/master/src/coref.py).
 
 # Data
 The source code assumes access to the English train, test, and development data of OntoNotes Release 5.0. This data should be located in a folder called 'data' inside the main directory. The data consists of 2,802 training documents, 343 development documents, and 348 testing documents. The average length of all documents is 454 words with a maximum length of 4,009 words. The number of mentions and coreferences in each document varies drastically, but is generally correlated with document length.
