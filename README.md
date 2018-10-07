@@ -45,15 +45,13 @@ The span representations are passed into a 3-layer, 150-dimensional feedforward 
 
 For these spans, pairwise representations are computed for a given span i and its antecedent j by concatenating the span representation for span i, the span representation for span j, the dot product between these representations, and 20-dimensional feature embeddings for genre, distance between the spans, and whether or not the two spans have the same speaker.
 
-These representations are passed into a feedforward network similar to that of scoring the spans. Clusters are then formed for these coreferences by identifying chains of coreference links (e.g. span j and span k both refer to span i). The learning objective is to maximize the log-likelihood of all correct antecedents that were not pruned, i.e.,
-
-![](/imgs/objective.png)
-
+These representations are passed into a feedforward network similar to that of scoring the spans. Clusters are then formed for these coreferences by identifying chains of coreference links (e.g. span j and span k both refer to span i). The learning objective is to maximize the log-likelihood of all correct antecedents that were not pruned.
 
 # Results
-
 Originally from the paper,
 
 ![](/imgs/results.png)
+
+# Recent Work
 
 The authors have since published [another paper](https://arxiv.org/abs/1804.05392), which achieves an F1 score of 73.0.
