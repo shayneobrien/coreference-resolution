@@ -21,9 +21,16 @@ Words are colored according to whether they are entities or not. Different color
 
 Entities can be very long and coreferent entities can occur extremely far away from one another. A greedy system would compute every possible span (sequence) of tokens and then compare it to every possible span that came before it. This makes the complexity of the problem O(T<sup>4</sup>), where T is the document length. For a 100 word document this would be 100 million possible options and for the longest document in our dataset, this equates to almost one quadrillion possible combinations.
 
-If this does not make it concrete, imagine that we had the sentence ```Arya Stark walks her direwolf, Nymeria.``` Here we have three entities: ```Arya Stark```, ```her```, and ```Nymeria```. As a native speaker of English it should be trivial to tell that ```her``` refers to ```Arya Stark```. But to a machine with no knowledge, how should it know that ```Arya``` and ```Stark``` should be a single entity rather than two separate ones, that ```Nymeria``` does not refer back to ```her``` even though they are arguably related, or even that that ```Arya Stark walks her direwolf, Nymeria``` is not just one big entity in and of itself?
+If this does not make it concrete, imagine that we had the sentence 
 
-For another example, consider the sentence ```Napoleon and all of his marvelously dressed, incredibly well trained, loyal troops marched all the way across the Europe to enter into Russia in an, ultimately unsuccessful, effort to conquer it for their country.``` The word ```their``` is referent to ```Napoleon and all of his marvelously dressed, incredibly well trained, loyal troops```; entities can span many, many tokens. Coreferent entities can also occur far away from one another.
+<p align="center"> Arya Stark walks her direwolf, Nymeria. </p>
+
+Here we have three entities: ```Arya Stark```, ```her```, and ```Nymeria```. As a native speaker of English it should be trivial to tell that ```her``` refers to ```Arya Stark```. But to a machine with no knowledge, how should it know that ```Arya``` and ```Stark``` should be a single entity rather than two separate ones, that ```Nymeria``` does not refer back to ```her``` even though they are arguably related, or even that that ```Arya Stark walks her direwolf, Nymeria``` is not just one big entity in and of itself?
+
+For another example, consider the sentence 
+-<p align="center"> Napoleon and all of his marvelously dressed, incredibly well trained, loyal troops marched all the way across the Europe to enter into Russia in an, ultimately unsuccessful, effort to conquer it for their country. </p>
+
+The word ```their``` is referent to ```Napoleon and all of his marvelously dressed, incredibly well trained, loyal troops```; entities can span many, many tokens. Coreferent entities can also occur far away from one another.
 
 # Model Architecture
 
