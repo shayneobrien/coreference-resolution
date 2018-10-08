@@ -11,13 +11,7 @@ Since the data require a license from the Linguistic Data Consortium to use, the
 Beyond the data, the source files also assume access to both [Turian embeddings](http://metaoptimize.s3.amazonaws.com/hlbl-embeddings-ACL2010/hlbl-embeddings-scaled.EMBEDDING_SIZE=50.txt.gz) and [GloVe embeddings](http://nlp.stanford.edu/data/glove.6B.zip).
 
 # Problem Definition
-Coreference is defined as occurring when one or more expressions in a document refer back to the an entity that came before it/them. Coreference resolution, then, is the task of finding all expressions that are coreferent with any of the entities found in a given text. This idea is summarized in the below image, courtesy of [Stanford NLP](https://nlp.stanford.edu/projects/coref.shtml).
-
-![](/imgs/problem_intro.png)
-
-# Useful Nomenclature
-
-Oftentimes the nomenclature of coreference resolution can be confusing. Visualizing them makes things a bit easier to understand:
+Coreference is defined as occurring when one or more expressions in a document refer back to the an entity that came before it/them. Coreference resolution, then, is the task of finding all expressions that are coreferent with any of the entities found in a given text. While this problem definition seems simple enough, oftentimes the nomenclature found in papers regarding coreference resolution is quite confusing. Visualizing them makes things a bit easier to understand:
 
 ![](/imgs/nomenclature.png)
 
@@ -25,7 +19,7 @@ Words are colored according to whether they are entities or not. Different color
 
 # Why Corefence Resolution is Hard
 
-Coref is hard because entities can be very long and coreferent entities can occur extremely far away from one another. A greedy system would compute every possible span (sequence) of tokens and then compare it to every possible span that came before it. This makes the complexity of the problem O(T<sup>4</sup>), where T is the document length. For a 100 word document this would be 100 million possible options and for the longest document in our dataset, this equates to almost one quadrillion possible combinations.
+Entities can be very long and coreferent entities can occur extremely far away from one another. A greedy system would compute every possible span (sequence) of tokens and then compare it to every possible span that came before it. This makes the complexity of the problem O(T<sup>4</sup>), where T is the document length. For a 100 word document this would be 100 million possible options and for the longest document in our dataset, this equates to almost one quadrillion possible combinations.
 
 If this does not make it concrete, imagine that we had the sentence ```Arya Stark walks her direwolf, Nymeria.``` Here we have three entities: ```Arya Stark```, ```her```, and ```Nymeria```. As a native speaker of English it should be trivial to tell that ```her``` refers to ```Arya Stark```. But to a machine with no knowledge, how should it know that ```Arya``` and ```Stark``` should be a single entity rather than two separate ones, that ```Nymeria``` does not refer back to ```her``` even though they are arguably related, or even that that ```Arya Stark walks her direwolf, Nymeria``` is not just one big entity in and of itself?
 
