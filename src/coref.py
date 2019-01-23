@@ -377,9 +377,14 @@ class PairwiseScore(nn.Module):
         with_epsilon = [torch.cat((score, epsilon), dim=0) for score in split_scores]
 
         # Batch and softmax
-        scores, _ = pad_and_stack(with_epsilon, value=-1e10)
-        probs = F.softmax(scores, dim=1).squeeze()
-
+        # get the softmax of the scores for each span in the document given
+        probs = [F.softmax(tensr) for tensr in with_epsilon]
+        
+        # pad the scores for each one with a dummy value, 1000 so that the tensors can 
+        # be of the same dimension for calculation loss and what not. 
+        probs, _ = pad_and_stack(scores, value=1000)
+        probs = probs.squeeze()
+       
         return spans, probs
 
 
@@ -435,6 +440,8 @@ class Trainer:
         self.__dict__.update(locals())
 
         self.train_corpus = list(self.train_corpus)
+        self.val_corpus = list(self.val_corpus)
+        
         self.model = to_cuda(model)
 
         self.optimizer = optim.Adam(params=[p for p in self.model.parameters()
@@ -490,8 +497,8 @@ class Trainer:
             epoch_corefs.append(safe_divide(corefs_found, total_corefs))
             epoch_identified.append(safe_divide(corefs_chosen, total_corefs))
 
-            # Step the learning rate decrease scheduler
-            self.scheduler.step()
+        # Step the learning rate decrease scheduler
+        self.scheduler.step()
 
         print('Epoch: %d | Loss: %f | Mention recall: %f | Coref recall: %f | Coref precision: %f' \
                 % (epoch, np.mean(epoch_loss), np.mean(epoch_mentions),
@@ -521,26 +528,27 @@ class Trainer:
             if (span.i1, span.i2) in gold_mentions:
                 mentions_found += 1
 
-            # Check which of these tuples are in the gold set, if any
-            golds = [
-                i for i, link in enumerate(span.yi_idx)
-                if link in gold_corefs
-            ]
+                # Check which of these tuples are in the gold set, if any
+                golds = [
+                    i for i, link in enumerate(span.yi_idx)
+                    if link in gold_corefs
+                ]
 
-            # If gold_pred_idx is not empty, consider the probabilities of the found antecedents
-            if golds:
-                gold_indexes[idx, golds] = 1
+                # If gold_pred_idx is not empty, consider the probabilities of the found antecedents
+                if golds:
+                    gold_indexes[idx, golds] = 1
 
-                # Progress logging for recall
-                corefs_found += len(golds)
-                found_corefs = sum((probs[idx, golds] > probs[idx, len(span.yi_idx)])).detach()
-                corefs_chosen += found_corefs.item()
-            else:
-                # Otherwise, set gold to dummy
-                gold_indexes[idx, len(span.yi_idx)] = 1
+                    # Progress logging for recall
+                    corefs_found += len(golds)
+                    found_corefs = sum((probs[idx, golds] > probs[idx, len(span.yi_idx)])).detach()
+                    corefs_chosen += found_corefs.item()
+                else:
+                    # Otherwise, set gold to dummy
+                    gold_indexes[idx, len(span.yi_idx)] = 1
 
         # Negative marginal log-likelihood
-        loss = torch.sum(torch.log(torch.sum(torch.mul(probs, gold_indexes), dim=1)), dim=0) * -1
+        eps = 1e-8
+        loss = torch.sum(torch.log(torch.sum(torch.mul(probs, gold_indexes), dim=1).clamp_(eps, 1-eps), dim=0) * -1
 
         # Backpropagate
         loss.backward()
@@ -678,5 +686,6 @@ class Trainer:
 
 # Initialize model, train
 model = CorefScore(embeds_dim=400, hidden_dim=200)
-trainer = Trainer(model, train_corpus, val_corpus, test_corpus, steps=150)
-trainer.train(10)
+# ?? train for 150 epochs, each each train 100 documents
+trainer = Trainer(model, train_corpus, val_corpus, test_corpus, steps=100)
+trainer.train(150)
