@@ -440,7 +440,7 @@ class Trainer:
         self.__dict__.update(locals())
 
         self.train_corpus = list(self.train_corpus)
-        self.val_corpus = list(self.val_corpus)
+        self.val_corpus = self.val_corpus
         
         self.model = to_cuda(model)
 
