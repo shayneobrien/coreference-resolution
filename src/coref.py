@@ -382,7 +382,7 @@ class PairwiseScore(nn.Module):
         
         # pad the scores for each one with a dummy value, 1000 so that the tensors can 
         # be of the same dimension for calculation loss and what not. 
-        probs, _ = pad_and_stack(scores, value=1000)
+        probs, _ = pad_and_stack(probs, value=1000)
         probs = probs.squeeze()
        
         return spans, probs
