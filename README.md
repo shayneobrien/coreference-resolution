@@ -6,7 +6,7 @@ This repository consists of an efficient, annotated PyTorch reimplementation of 
 # Data
 The source code assumes access to the English train, test, and development data of OntoNotes Release 5.0. This data should be located in a folder called 'data' inside the main directory. The data consists of 2,802 training documents, 343 development documents, and 348 testing documents. The average length of all documents is 454 words with a maximum length of 4,009 words. The number of mentions and coreferences in each document varies drastically, but is generally correlated with document length.
 
-Since the data require a license from the Linguistic Data Consortium to use, they are thus not supplied here. Information on how to download and preprocess them can be found [here](http://conll.cemantix.org/2012/data.html) and [here](https://catalog.ldc.upenn.edu/ldc2013t19), respectively.
+Since the data require a license from the Linguistic Data Consortium to use, they are thus not supplied here. Information on how to download and preprocess them can be found [here](http://conll.cemantix.org/2012/data.html) and [here](https://catalog.ldc.upenn.edu/LDC2013T19), respectively.
 
 Beyond the data, the source files also assume access to both [Turian embeddings](http://metaoptimize.s3.amazonaws.com/hlbl-embeddings-ACL2010/hlbl-embeddings-scaled.EMBEDDING_SIZE=50.txt.gz) and [GloVe embeddings](http://nlp.stanford.edu/data/glove.6B.zip).
 
