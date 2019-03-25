@@ -548,7 +548,7 @@ class Trainer:
 
         # Negative marginal log-likelihood
         eps = 1e-8
-        loss = torch.sum(torch.log(torch.sum(torch.mul(probs, gold_indexes), dim=1).clamp_(eps, 1-eps), dim=0) * -1
+        loss = torch.sum(torch.log(torch.sum(torch.mul(probs, gold_indexes), dim=1).clamp_(eps, 1-eps), dim=0) * -1)
 
         # Backpropagate
         loss.backward()
